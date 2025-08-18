@@ -1,3 +1,5 @@
+@plugin "@tailwindcss/typography";
+
 @import "tailwindcss";
 
 :root {
@@ -24,3 +26,31 @@ body {
   color: var(--foreground);
   font-family: Arial, Helvetica, sans-serif;
 }
+
+/* 에디터 렌더링 보정 */
+.editor-content h1 { @apply text-3xl font-bold mt-6 mb-3; }
+.editor-content h2 { @apply text-2xl font-semibold mt-5 mb-2; }
+.editor-content p  { @apply my-2; }
+
+/* 목록은 Tailwind가 list-style과 padding을 없애서 안 보임 → 복원 */
+.editor-content ul { @apply list-disc pl-6 my-2; }
+.editor-content ol { @apply list-decimal pl-6 my-2; }
+.editor-content li { @apply my-1; }
+
+/* TipTap 기본 스타일 */
+.tiptap:focus { outline: none; }
+
+/* 제목 크기 */
+.tiptap h1 { font-size: 1.75rem; line-height: 2.25rem; font-weight: 700; margin: 1rem 0 .5rem; }
+.tiptap h2 { font-size: 1.5rem;  line-height: 2rem;   font-weight: 700; margin: .75rem 0 .5rem; }
+.tiptap h3 { font-size: 1.25rem; line-height: 1.75rem; font-weight: 600; margin: .5rem 0 .25rem; }
+
+/* 목록 표시 (Tailwind reset 때문에 꼭 필요) */
+.tiptap ul { list-style: disc; padding-left: 1.5rem; margin: .5rem 0; }
+.tiptap ol { list-style: decimal; padding-left: 1.5rem; margin: .5rem 0; }
+.tiptap li { margin: .25rem 0; }
+
+/* 체크리스트 */
+.tiptap ul[data-type="taskList"] { list-style: none; padding-left: 0; }
+.tiptap ul[data-type="taskList"] li { display: flex; gap: .5rem; }
+.tiptap ul[data-type="taskList"] li > label { margin-right: .5rem; }
