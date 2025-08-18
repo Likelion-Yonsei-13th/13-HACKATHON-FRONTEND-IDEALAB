@@ -1,5 +1,4 @@
 "use client";
-import { PhoneCall } from "lucide-react";
 import { useEffect, useState } from "react";
 
 export default function RightTab() {
