@@ -1,6 +1,8 @@
 "use client";
 import { useEffect, useState } from "react";
 
+// 커밋이 안돼서.. 아무 내용ㅜ
+
 export default function RightTab() {
   const [currentDate, setCurrentDate] = useState("");
 
