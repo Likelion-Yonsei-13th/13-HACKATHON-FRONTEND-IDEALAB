@@ -1,57 +1,51 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useEditor, EditorContent } from "@tiptap/react";
 import StarterKit from "@tiptap/starter-kit";
 import Placeholder from "@tiptap/extension-placeholder";
+import Underline from "@tiptap/extension-underline";
 import Highlight from "@tiptap/extension-highlight";
 import Link from "@tiptap/extension-link";
 import TaskList from "@tiptap/extension-task-list";
 import TaskItem from "@tiptap/extension-task-item";
 
-/** 간단 throttle: 마지막 실행 이후 ms 내엔 모아서 1번만 실행 */
+/** 간단 throttle: 마지막 실행 이후 ms 내엔 1번만 실행 */
 function throttle<T extends (...a: any[]) => void>(fn: T, ms: number) {
   let last = 0;
-  let timer: ReturnType<typeof setTimeout> | null = null;
+  let tid: ReturnType<typeof setTimeout> | null = null;
   return (...args: Parameters<T>) => {
     const now = Date.now();
-    const remaining = ms - (now - last);
-    if (remaining <= 0) {
+    const left = ms - (now - last);
+    if (left <= 0) {
       last = now;
-      if (timer) {
-        clearTimeout(timer);
-        timer = null;
-      }
+      if (tid) clearTimeout(tid);
       fn(...args);
     } else {
-      if (timer) clearTimeout(timer);
-      timer = setTimeout(() => {
+      if (tid) clearTimeout(tid);
+      tid = setTimeout(() => {
         last = Date.now();
         fn(...args);
-      }, remaining);
+      }, left);
     }
   };
 }
 
 type Props = {
   /** 문서 저장 키 (로컬스토리지) */
-  docId?: string;
+  docId: string;
   /** 초기 HTML (없으면 defaultHTML) */
   initialHTML?: string;
-  /** 헤더 높이(px). 툴바를 그 바로 아래에 붙이고 싶을 때 사용 */
+  /** 헤더 높이(px). sticky 툴바 오프셋 */
   toolbarOffset?: number;
 };
 
 export default function Editor({
-  docId = "demo-doc",
+  docId,
   initialHTML,
   toolbarOffset = 0,
 }: Props) {
-  // 화면 표시 상태 (훅 순서 영향 X)
-  const [mounted, setMounted] = useState(false);
-  useEffect(() => setMounted(true), []);
-
-  // TipTap 에디터 (SSR 안전)
+  // TipTap 인스턴스
   const editor = useEditor({
     extensions: [
       StarterKit.configure({
@@ -59,62 +53,67 @@ export default function Editor({
         orderedList: { keepMarks: true },
       }),
       Placeholder.configure({
-        placeholder:
-          "여기에 자유롭게 작성하세요...",
-          emptyEditorClass:
-            "before:content-[attr(data-placeholder)] before:text-neutral-400 before:float-left before:h-0 pointer-events-none",
-
+        placeholder: "여기에 자유롭게 작성하세요…",
+        emptyEditorClass:
+          "before:content-[attr(data-placeholder)] before:text-neutral-400 before:float-left before:h-0 pointer-events-none",
       }),
-      Highlight,
-      Link.configure({ openOnClick: true, autolink: true, linkOnPaste: true }),
+      Underline,
+      Highlight, // 필요하면 형광펜용
+      Link.configure({
+        openOnClick: true,
+        autolink: true,
+        linkOnPaste: true,
+        protocols: ["http", "https", "mailto", "tel"],
+      }),
       TaskList,
       TaskItem.configure({ nested: true }),
     ],
-    immediatelyRender: false, // SSR 단계에서 DOM 생성 방지
+    immediatelyRender: false, // SSR 단계 DOM 생성 방지
     content: initialHTML ?? defaultHTML,
     autofocus: "end",
     editorProps: {
       attributes: {
-        // 박스/테두리 제거 + 전체 폭 사용
+        // 테두리 없는 자유 편집 느낌 + 문단 폭 제한 없음
         class:
           "prose prose-neutral max-w-none focus:outline-none min-h-[70dvh] px-0 py-0",
       },
     },
   });
 
-  // 로컬스토리지: 마운트 후 로드 + 변경시 저장(throttle)
+  // 최초 로드: 저장된 내용 불러오기
   useEffect(() => {
     if (!editor) return;
-
-    // 초기 로드
     try {
       const saved =
         typeof window !== "undefined"
           ? window.localStorage.getItem(`doc:${docId}`)
           : null;
       if (saved) editor.commands.setContent(saved, false); // 히스토리에 남기지 않음
-    } catch {}
+    } catch {
+      /* noop */
+    }
+  }, [editor, docId]);
 
-    // 저장 (300~500ms 추천)
+  // 변경 저장(스로틀)
+  useEffect(() => {
+    if (!editor) return;
     const onUpdate = throttle(() => {
       try {
         const html = editor.getHTML();
         if (typeof window !== "undefined") {
           window.localStorage.setItem(`doc:${docId}`, html);
         }
-      } catch {}
+      } catch {
+        /* noop */
+      }
     }, 300);
-
     editor.on("update", onUpdate);
-    return () => {
-      try {
-        editor.off("update", onUpdate);
-      } catch {}
-    };
+    return () => editor.off("update", onUpdate);
   }, [editor, docId]);
 
   // 로딩 스켈레톤
-  if (!editor || !mounted) {
+  const ready = !!editor;
+  if (!ready) {
     return (
       <div className="min-h-[70dvh] px-8 py-8 animate-pulse text-neutral-300">
         에디터 로딩 중…
@@ -124,7 +123,7 @@ export default function Editor({
 
   return (
     <div className="w-full">
-      {/* 상단 전체폭 툴바 (헤더 높이만큼 오프셋) */}
+      {/* 상단 전체폭 툴바 */}
       <div
         className="sticky z-30 w-full border-b bg-white/90 backdrop-blur supports-[backdrop-filter]:bg-white/60"
         style={{ top: toolbarOffset }}
@@ -134,7 +133,7 @@ export default function Editor({
         </div>
       </div>
 
-      {/* 본문 (필요하면 max-w-[1100px] mx-auto로 종이폭 느낌 가능) */}
+      {/* 본문 */}
       <div className="mx-auto w-full px-8 py-8">
         <EditorContent editor={editor} />
       </div>
@@ -147,6 +146,19 @@ function Toolbar({ editor }: { editor: any }) {
   const btn =
     "rounded-md border px-3 py-1.5 text-sm hover:bg-neutral-50 active:scale-[.99]";
   const active = "bg-neutral-100";
+  const can = (cb: () => boolean) => (editor ? cb() : false);
+
+  // 링크 도우미
+  const setLink = () => {
+    const prev = editor.getAttributes("link")?.href as string | undefined;
+    const href = prompt("링크 URL을 입력하세요", prev || "https://");
+    if (href === null) return; // 취소
+    if (href === "") {
+      editor.chain().focus().unsetLink().run();
+    } else {
+      editor.chain().focus().setLink({ href }).run();
+    }
+  };
 
   return (
     <div className="flex flex-wrap items-center gap-2">
@@ -168,9 +180,11 @@ function Toolbar({ editor }: { editor: any }) {
       >
         제목2
       </button>
+
       <button
         className={`${btn} ${editor.isActive("bold") ? active : ""}`}
         onClick={() => editor.chain().focus().toggleBold().run()}
+        disabled={!can(() => editor.can().chain().focus().toggleBold().run())}
         type="button"
       >
         Bold
@@ -178,6 +192,7 @@ function Toolbar({ editor }: { editor: any }) {
       <button
         className={`${btn} ${editor.isActive("italic") ? active : ""}`}
         onClick={() => editor.chain().focus().toggleItalic().run()}
+        disabled={!can(() => editor.can().chain().focus().toggleItalic().run())}
         type="button"
       >
         Italic
@@ -216,14 +231,7 @@ function Toolbar({ editor }: { editor: any }) {
       >
         밑줄
       </button>
-      <button
-        className={btn}
-        onClick={() => {
-          const href = prompt("링크 URL?");
-          if (href) editor.chain().focus().setLink({ href }).run();
-        }}
-        type="button"
-      >
+      <button className={btn} onClick={setLink} type="button">
         링크
       </button>
 

@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { useRouter } from "next/navigation";
 import ProjectModal, { NewProject, CreateKind } from "./ProjectModal";
 import EditItemModal from "./EditItemModal";
 
@@ -33,10 +34,18 @@ const INITIAL_SECTIONS: Section[] = [
   },
 ];
 
+// key -> 한글 라벨 (브레드크럼에 사용)
+const sectionLabel = (k: SectionKey) =>
+  k === "ws" ? "멋사의 워크스페이스" : k === "folder" ? "내 폴더" : "내 파일";
+
 export default function Sidebar() {
+  const router = useRouter();
+
   const [collapsed, setCollapsed] = useState(false);
   const [open, setOpen] = useState<Record<SectionKey, boolean>>({
-    ws: true, folder: true, file: true,
+    ws: true,
+    folder: true,
+    file: true,
   });
   const [sections, setSections] = useState<Section[]>(INITIAL_SECTIONS);
 
@@ -56,9 +65,12 @@ export default function Sidebar() {
 
   const toggle = (k: SectionKey) => setOpen(prev => ({ ...prev, [k]: !prev[k] }));
 
-  // 새로 만들기
+  // 새로 만들기: 목록 추가 + 문서/메타 + 브레드크럼 세팅(선택)까지
   const handleCreate = (p: NewProject) => {
     if (!creatingFor) return;
+
+    let createdId = "";
+
     setSections(prev =>
       prev.map(s => {
         if (s.key !== creatingFor) return s;
@@ -68,15 +80,28 @@ export default function Sidebar() {
           color: p.color,
           icon: creatingFor === "file" ? "file" : undefined,
         };
+        createdId = newItem.id;
         return { ...s, items: [...(s.items ?? []), newItem] };
       })
     );
+
+    // 초기 문서/메타 저장
+    localStorage.setItem(`doc:${createdId}`, "");
+    localStorage.setItem(
+      `meta:${createdId}`,
+      JSON.stringify({ section: sectionLabel(creatingFor), title: p.title })
+    );
+    // 생성 직후 열게 하려면 주석 해제
+    // localStorage.setItem("ws:breadcrumb", JSON.stringify({ section: sectionLabel(creatingFor), title: p.title }));
+    // router.push(`/ws/${createdId}`);
+
     setCreatingFor(null);
   };
 
-  // 수정 저장
+  // 수정 저장: 목록 + meta:{id} 동시 반영
   const handleSaveEdit = (val: { title: string; color?: string }) => {
     if (!editing) return;
+
     setSections(prev =>
       prev.map(s => {
         if (s.key !== editing.section) return s;
@@ -88,30 +113,69 @@ export default function Sidebar() {
         };
       })
     );
+
+    // meta:title 갱신
+    try {
+      const raw = localStorage.getItem(`meta:${editing.id}`);
+      const prevMeta = raw ? JSON.parse(raw) : {};
+      localStorage.setItem(
+        `meta:${editing.id}`,
+        JSON.stringify({ ...prevMeta, title: val.title })
+      );
+
+      // 만약 현재 열린 문서가 이 항목이라면 브레드크럼도 즉시 갱신 (선택)
+      if (location.pathname.includes(`/ws/${editing.id}`)) {
+        const label = sectionLabel(editing.section);
+        localStorage.setItem("ws:breadcrumb", JSON.stringify({ section: label, title: val.title }));
+        // 페이지는 useEffect로 ws:breadcrumb을 읽으므로 새로고침 없이 반영됨
+      }
+    } catch {}
+
     setEditing(null);
   };
 
   const modalKind: CreateKind =
     creatingFor === "ws" ? "project" : creatingFor === "folder" ? "folder" : "file";
 
-  const handleLogoClick = () => { if (collapsed) setCollapsed(false); };
+  const handleLogoClick = () => {
+    if (collapsed) setCollapsed(false);
+  };
 
-  // 표시용 10자 트렁케이트
   const showTitle = (t: string) => (t.length > 10 ? t.slice(0, 10) + "…" : t);
 
-  // 아이템 공용 렌더러
+  // 공용 아이템 렌더러: 클릭 시 브레드크럼 저장 → 라우팅
   const renderItems = (key: SectionKey) =>
     sections.find(s => s.key === key)?.items?.map(it => (
       <div
         key={it.id}
-        className="flex items-center gap-2 rounded-md px-3 py-2 text-sm border border-neutral-200 bg-white hover:bg-neutral-50"
-        title={it.title} /* 풀 제목은 툴팁으로 */
+        role="button"
+        tabIndex={0}
+        onClick={() => {
+          const label = sectionLabel(key);
+          localStorage.setItem("ws:breadcrumb", JSON.stringify({ section: label, title: it.title }));
+          // (백업 메타) 없을 수도 있으니 함께 저장해두면 page fallback 시 유용
+          localStorage.setItem(`meta:${it.id}`, JSON.stringify({ section: label, title: it.title }));
+          router.push(`/ws/${it.id}`);
+        }}
+        onKeyDown={(e) => {
+          if (e.key === "Enter" || e.key === " ") {
+            e.preventDefault();
+            const label = sectionLabel(key);
+            localStorage.setItem("ws:breadcrumb", JSON.stringify({ section: label, title: it.title }));
+            localStorage.setItem(`meta:${it.id}`, JSON.stringify({ section: label, title: it.title }));
+            router.push(`/ws/${it.id}`);
+          }
+        }}
+        className="w-full flex items-center gap-2 rounded-md px-3 py-2 text-sm border border-neutral-200 bg-white hover:bg-neutral-50 cursor-pointer"
+        title={it.title}
       >
         <span className="inline-block h-3 w-3 rounded-sm" style={{ background: it.color ?? "#d1d5db" }} />
         <span className="truncate">{showTitle(it.title)}</span>
+
+        {/* 연필 버튼 (부모 클릭 막기) */}
         <button
           type="button"
-          onClick={() => setEditing({ section: key, id: it.id })}
+          onClick={(e) => { e.stopPropagation(); setEditing({ section: key, id: it.id }); }}
           className="ml-auto inline-flex items-center justify-center"
           aria-label="수정"
           title="수정"
@@ -130,7 +194,7 @@ export default function Sidebar() {
       ].join(" ")}
     >
       <div className="flex h-dvh w-full flex-col">
-        {/* 상단 바: h-14 + 안쪽 래퍼 패턴으로 줄 정렬 안정화 */}
+        {/* 상단 바 */}
         <div className="h-14 border-b">
           <div className="h-full flex items-center gap-2 px-3">
             <img src="/logos/메인로고.png" alt="app" className="h-8 w-auto" />
@@ -164,8 +228,7 @@ export default function Sidebar() {
         <div className="px-2 pt-2">
           <button
             onClick={() => toggle("ws")}
-            className={["flex w-full items-center rounded-md px-2 py-2",
-              "bg-[#e7f0ff] text-slate-900 border border-[#cfe0ff]"].join(" ")}
+            className={["flex w-full items-center rounded-md px-2 py-2", "bg-[#e7f0ff] text-slate-900 border border-[#cfe0ff]"].join(" ")}
           >
             <span className="mr-2 inline-block h-3 w-3 rounded-sm bg-[#3b82f6]" />
             {!collapsed && <span className="font-medium text-sm">멋사의 워크스페이스</span>}
@@ -197,8 +260,11 @@ export default function Sidebar() {
         {/* 내 폴더 / 내 파일 */}
         <nav className="flex-1 overflow-y-auto px-2 pt-2">
           <SectionHeader
-            title="내 폴더" open={open.folder} onToggle={() => toggle("folder")}
-            collapsed={collapsed} leftIconUrl="/icons/folder.png"
+            title="내 폴더"
+            open={open.folder}
+            onToggle={() => toggle("folder")}
+            collapsed={collapsed}
+            leftIconUrl="/icons/folder.png"
             onAdd={() => setCreatingFor("folder")}
           />
           {open.folder && !collapsed && (
@@ -209,8 +275,11 @@ export default function Sidebar() {
 
           <div className="mt-2" />
           <SectionHeader
-            title="내 파일" open={open.file} onToggle={() => toggle("file")}
-            collapsed={collapsed} leftIconUrl="/icons/file.png"
+            title="내 파일"
+            open={open.file}
+            onToggle={() => toggle("file")}
+            collapsed={collapsed}
+            leftIconUrl="/icons/file.png"
             onAdd={() => setCreatingFor("file")}
           />
           {open.file && !collapsed && (
@@ -258,32 +327,62 @@ export default function Sidebar() {
 
 /** 섹션 헤더 */
 function SectionHeader({
-  title, open, onToggle, collapsed, leftIconUrl, onAdd,
+  title,
+  open,
+  onToggle,
+  collapsed,
+  leftIconUrl,
+  onAdd,
 }: {
-  title: string; open: boolean; onToggle: () => void; collapsed: boolean;
-  leftIconUrl?: string; onAdd?: () => void;
+  title: string;
+  open: boolean;
+  onToggle: () => void;
+  collapsed: boolean;
+  leftIconUrl?: string;
+  onAdd?: () => void;
 }) {
   return (
     <div className={`group flex w-full items-center gap-2 rounded-lg px-2 py-2 text-sm ${
-      open ? "bg-blue-50 border border-blue-100" : "hover:bg-neutral-50"}`}>
+      open ? "bg-blue-50 border border-blue-100" : "hover:bg-neutral-50"
+    }`}>
       <button type="button" onClick={onToggle} className="flex flex-1 items-center gap-2 text-left">
-        {leftIconUrl ? <img src={leftIconUrl} alt="" className="h-[18px] w-[18px]" /> : <span className="inline-block h-[18px] w-[18px]" />}
+        {leftIconUrl ? (
+          <img src={leftIconUrl} alt="" className="h-[18px] w-[18px]" />
+        ) : (
+          <span className="inline-block h-[18px] w-[18px]" />
+        )}
         {!collapsed && <span className="font-medium">{title}</span>}
       </button>
       {!collapsed && (
         <div className="ml-auto inline-flex items-center gap-2">
           {onAdd && (
-            <button type="button" onClick={(e) => { e.stopPropagation(); onAdd(); }}
-                    className="inline-flex h-5 w-5 items-center justify-center rounded-sm border border-neutral-200"
-                    aria-label={`${title}에 추가`} title={`${title}에 추가`}>
+            <button
+              type="button"
+              onClick={(e) => { e.stopPropagation(); onAdd(); }}
+              className="inline-flex h-5 w-5 items-center justify-center rounded-sm border border-neutral-200"
+              aria-label={`${title}에 추가`}
+              title={`${title}에 추가`}
+            >
               <span className="text-sm leading-none">+</span>
             </button>
           )}
-          <button type="button" onClick={onToggle}
-                  className="inline-flex h-5 w-5 items-center justify-center" aria-label="toggle" title="toggle">
-            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"
-                 fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"
-                 className={`h-3.5 w-3.5 ${open ? "" : "rotate-180"}`}>
+          <button
+            type="button"
+            onClick={onToggle}
+            className="inline-flex h-5 w-5 items-center justify-center"
+            aria-label="toggle"
+            title="toggle"
+          >
+            <svg
+              xmlns="http://www.w3.org/2000/svg"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="2"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              className={`h-3.5 w-3.5 ${open ? "" : "rotate-180"}`}
+            >
               <path d="m6 9 6 6 6-6" />
             </svg>
           </button>
