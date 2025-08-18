@@ -1,3 +1,4 @@
+// components/Sidebar.tsx
 "use client";
 
 import { useEffect, useState } from "react";
@@ -34,7 +35,7 @@ const INITIAL_SECTIONS: Section[] = [
   },
 ];
 
-// key -> 한글 라벨 (브레드크럼에 사용)
+// key -> 한글 라벨 (브레드크럼 표시용)
 const sectionLabel = (k: SectionKey) =>
   k === "ws" ? "멋사의 워크스페이스" : k === "folder" ? "내 폴더" : "내 파일";
 
@@ -65,7 +66,7 @@ export default function Sidebar() {
 
   const toggle = (k: SectionKey) => setOpen(prev => ({ ...prev, [k]: !prev[k] }));
 
-  // 새로 만들기: 목록 추가 + 문서/메타 + 브레드크럼 세팅(선택)까지
+  // ✅ 새로 만들기: 목록 추가 + 문서/메타/브레드크럼 저장 + 즉시 이동
   const handleCreate = (p: NewProject) => {
     if (!creatingFor) return;
 
@@ -85,20 +86,18 @@ export default function Sidebar() {
       })
     );
 
-    // 초기 문서/메타 저장
-    localStorage.setItem(`doc:${createdId}`, "");
-    localStorage.setItem(
-      `meta:${createdId}`,
-      JSON.stringify({ section: sectionLabel(creatingFor), title: p.title })
-    );
-    // 생성 직후 열게 하려면 주석 해제
-    // localStorage.setItem("ws:breadcrumb", JSON.stringify({ section: sectionLabel(creatingFor), title: p.title }));
-    // router.push(`/ws/${createdId}`);
+    // 저장
+    const label = sectionLabel(creatingFor);
+    localStorage.setItem(`doc:${createdId}`, ""); // 초기 내용
+    localStorage.setItem(`meta:${createdId}`, JSON.stringify({ section: label, title: p.title }));
+    localStorage.setItem("ws:breadcrumb", JSON.stringify({ section: label, title: p.title }));
 
+    // 이동
     setCreatingFor(null);
+    router.push(`/ws/${createdId}`);
   };
 
-  // 수정 저장: 목록 + meta:{id} 동시 반영
+  // 수정 저장: 목록 + meta:{id} 동시 반영, 열려 있으면 브레드크럼도 갱신
   const handleSaveEdit = (val: { title: string; color?: string }) => {
     if (!editing) return;
 
@@ -114,20 +113,16 @@ export default function Sidebar() {
       })
     );
 
-    // meta:title 갱신
     try {
       const raw = localStorage.getItem(`meta:${editing.id}`);
       const prevMeta = raw ? JSON.parse(raw) : {};
-      localStorage.setItem(
-        `meta:${editing.id}`,
-        JSON.stringify({ ...prevMeta, title: val.title })
-      );
+      localStorage.setItem(`meta:${editing.id}`, JSON.stringify({ ...prevMeta, title: val.title }));
 
-      // 만약 현재 열린 문서가 이 항목이라면 브레드크럼도 즉시 갱신 (선택)
       if (location.pathname.includes(`/ws/${editing.id}`)) {
-        const label = sectionLabel(editing.section);
-        localStorage.setItem("ws:breadcrumb", JSON.stringify({ section: label, title: val.title }));
-        // 페이지는 useEffect로 ws:breadcrumb을 읽으므로 새로고침 없이 반영됨
+        localStorage.setItem(
+          "ws:breadcrumb",
+          JSON.stringify({ section: sectionLabel(editing.section), title: val.title })
+        );
       }
     } catch {}
 
@@ -137,9 +132,7 @@ export default function Sidebar() {
   const modalKind: CreateKind =
     creatingFor === "ws" ? "project" : creatingFor === "folder" ? "folder" : "file";
 
-  const handleLogoClick = () => {
-    if (collapsed) setCollapsed(false);
-  };
+  const handleLogoClick = () => { if (collapsed) setCollapsed(false); };
 
   const showTitle = (t: string) => (t.length > 10 ? t.slice(0, 10) + "…" : t);
 
@@ -153,7 +146,6 @@ export default function Sidebar() {
         onClick={() => {
           const label = sectionLabel(key);
           localStorage.setItem("ws:breadcrumb", JSON.stringify({ section: label, title: it.title }));
-          // (백업 메타) 없을 수도 있으니 함께 저장해두면 page fallback 시 유용
           localStorage.setItem(`meta:${it.id}`, JSON.stringify({ section: label, title: it.title }));
           router.push(`/ws/${it.id}`);
         }}
@@ -172,7 +164,6 @@ export default function Sidebar() {
         <span className="inline-block h-3 w-3 rounded-sm" style={{ background: it.color ?? "#d1d5db" }} />
         <span className="truncate">{showTitle(it.title)}</span>
 
-        {/* 연필 버튼 (부모 클릭 막기) */}
         <button
           type="button"
           onClick={(e) => { e.stopPropagation(); setEditing({ section: key, id: it.id }); }}
@@ -228,7 +219,7 @@ export default function Sidebar() {
         <div className="px-2 pt-2">
           <button
             onClick={() => toggle("ws")}
-            className={["flex w-full items-center rounded-md px-2 py-2", "bg-[#e7f0ff] text-slate-900 border border-[#cfe0ff]"].join(" ")}
+            className={["flex w-full items-center rounded-md px-2 py-2","bg-[#e7f0ff] text-slate-900 border border-[#cfe0ff]"].join(" ")}
           >
             <span className="mr-2 inline-block h-3 w-3 rounded-sm bg-[#3b82f6]" />
             {!collapsed && <span className="font-medium text-sm">멋사의 워크스페이스</span>}
@@ -302,12 +293,7 @@ export default function Sidebar() {
       </div>
 
       {/* 생성 모달 */}
-      <ProjectModal
-        open={!!creatingFor}
-        kind={modalKind}
-        onClose={() => setCreatingFor(null)}
-        onCreate={handleCreate}
-      />
+      <ProjectModal open={!!creatingFor} kind={modalKind} onClose={() => setCreatingFor(null)} onCreate={handleCreate} />
 
       {/* 수정 모달 */}
       <EditItemModal
