@@ -60,7 +60,10 @@ export default function Editor({
       }),
       Placeholder.configure({
         placeholder:
-          "여기에 자유롭게 작성하세요.  / 입력으로 명령(예: /h1, /todo)…",
+          "여기에 자유롭게 작성하세요...",
+          emptyEditorClass:
+            "before:content-[attr(data-placeholder)] before:text-neutral-400 before:float-left before:h-0 pointer-events-none",
+
       }),
       Highlight,
       Link.configure({ openOnClick: true, autolink: true, linkOnPaste: true }),
