@@ -10,7 +10,7 @@ export default function Page() {
     <main className="min-h-screen">
       {/* 상단 고정 헤더 */}
       <div className="sticky top-0 z-20 border-b bg-white/70 backdrop-blur supports-[backdrop-filter]:bg-white/60">
-        <div className="mx-auto max-w-screen-2xl px-6 h-12 flex items-center justify-between">
+        <div className="mx-auto max-w-screen-2xl px-6 h-14 flex items-center justify-between">
           {/* 왼쪽: 브레드크럼 + 제목 */}
           <div className="flex flex-col">
             <Breadcrumb items={crumbs} />
