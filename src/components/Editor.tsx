@@ -1,6 +1,7 @@
+// components/Editor.tsx
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useState } from "react";
 import { useEditor, EditorContent } from "@tiptap/react";
 import StarterKit from "@tiptap/starter-kit";
 import Placeholder from "@tiptap/extension-placeholder";
@@ -36,14 +37,20 @@ type Props = {
   docId: string;
   /** 초기 HTML (없으면 defaultHTML) */
   initialHTML?: string;
-  /** 헤더 높이(px). sticky 툴바 오프셋 */
+  /** sticky 툴바 오프셋(px) */
   toolbarOffset?: number;
+  /** 로컬스토리지 사용 여부 (기본: true) */
+  persist?: boolean;
+  /** persist=false일 때, 마운트 시 기존 저장본 제거 (기본: false) */
+  clearOnMount?: boolean;
 };
 
 export default function Editor({
   docId,
   initialHTML,
   toolbarOffset = 0,
+  persist = true,
+  clearOnMount = false,
 }: Props) {
   // TipTap 인스턴스
   const editor = useEditor({
@@ -58,7 +65,7 @@ export default function Editor({
           "before:content-[attr(data-placeholder)] before:text-neutral-400 before:float-left before:h-0 pointer-events-none",
       }),
       Underline,
-      Highlight, // 필요하면 형광펜용
+      Highlight,
       Link.configure({
         openOnClick: true,
         autolink: true,
@@ -80,40 +87,45 @@ export default function Editor({
     },
   });
 
-  // 최초 로드: 저장된 내용 불러오기
+  // 저장/불러오기 제어
   useEffect(() => {
     if (!editor) return;
+
+    // 저장 끈 모드
+    if (!persist) {
+      if (clearOnMount && typeof window !== "undefined") {
+        try {
+          window.localStorage.removeItem(`doc:${docId}`);
+        } catch {}
+      }
+      return; // 저장/불러오기 전부 스킵
+    }
+
+    // ── persist=true: 저장본 불러오기
     try {
       const saved =
         typeof window !== "undefined"
           ? window.localStorage.getItem(`doc:${docId}`)
           : null;
       if (saved) editor.commands.setContent(saved, false); // 히스토리에 남기지 않음
-    } catch {
-      /* noop */
-    }
-  }, [editor, docId]);
+    } catch {}
 
-  // 변경 저장(스로틀)
-  useEffect(() => {
-    if (!editor) return;
+    // 변경 저장(스로틀)
     const onUpdate = throttle(() => {
       try {
         const html = editor.getHTML();
         if (typeof window !== "undefined") {
           window.localStorage.setItem(`doc:${docId}`, html);
         }
-      } catch {
-        /* noop */
-      }
+      } catch {}
     }, 300);
+
     editor.on("update", onUpdate);
     return () => editor.off("update", onUpdate);
-  }, [editor, docId]);
+  }, [editor, docId, persist, clearOnMount]);
 
   // 로딩 스켈레톤
-  const ready = !!editor;
-  if (!ready) {
+  if (!editor) {
     return (
       <div className="min-h-[70dvh] px-8 py-8 animate-pulse text-neutral-300">
         에디터 로딩 중…

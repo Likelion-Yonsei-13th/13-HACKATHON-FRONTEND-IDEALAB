@@ -15,8 +15,6 @@ const INITIAL_SECTIONS: Section[] = [
     key: "ws",
     title: "멋사의 워크스페이스",
     items: [
-      { id: "p1", title: "해커톤 준비", color: "#ef4444" },
-      { id: "p2", title: "신촌 카페 창업", color: "#eab308" },
     ],
   },
   {
@@ -35,7 +33,7 @@ const INITIAL_SECTIONS: Section[] = [
   },
 ];
 
-// key -> 한글 라벨 (브레드크럼 표시용)
+// 섹션 키 → 브레드크럼 라벨
 const sectionLabel = (k: SectionKey) =>
   k === "ws" ? "멋사의 워크스페이스" : k === "folder" ? "내 폴더" : "내 파일";
 
@@ -50,10 +48,11 @@ export default function Sidebar() {
   });
   const [sections, setSections] = useState<Section[]>(INITIAL_SECTIONS);
 
-  // 생성/수정 모달 상태
+  // 모달 상태
   const [creatingFor, setCreatingFor] = useState<SectionKey | null>(null);
   const [editing, setEditing] = useState<{ section: SectionKey; id: string } | null>(null);
 
+  /* 접힘 상태 유지 */
   useEffect(() => {
     const saved = typeof window !== "undefined" && localStorage.getItem("sidebar-collapsed");
     if (saved) setCollapsed(saved === "1");
@@ -66,7 +65,7 @@ export default function Sidebar() {
 
   const toggle = (k: SectionKey) => setOpen(prev => ({ ...prev, [k]: !prev[k] }));
 
-  // ✅ 새로 만들기: 목록 추가 + 문서/메타/브레드크럼 저장 + 즉시 이동
+  /* 새로 만들기 → 저장 → 즉시 이동 */
   const handleCreate = (p: NewProject) => {
     if (!creatingFor) return;
 
@@ -86,18 +85,17 @@ export default function Sidebar() {
       })
     );
 
-    // 저장
     const label = sectionLabel(creatingFor);
-    localStorage.setItem(`doc:${createdId}`, ""); // 초기 내용
+    // 문서/메타/브레드크럼 저장
+    localStorage.setItem(`doc:${createdId}`, "");
     localStorage.setItem(`meta:${createdId}`, JSON.stringify({ section: label, title: p.title }));
     localStorage.setItem("ws:breadcrumb", JSON.stringify({ section: label, title: p.title }));
 
-    // 이동
     setCreatingFor(null);
     router.push(`/ws/${createdId}`);
   };
 
-  // 수정 저장: 목록 + meta:{id} 동시 반영, 열려 있으면 브레드크럼도 갱신
+  /* 수정 저장: 목록 + meta:{id} 동시 반영, 열려있으면 브레드크럼도 갱신 */
   const handleSaveEdit = (val: { title: string; color?: string }) => {
     if (!editing) return;
 
@@ -129,14 +127,22 @@ export default function Sidebar() {
     setEditing(null);
   };
 
+  /* 로그아웃: 서버 세션 정리(선택) + 로그인 화면으로 이동 */
+  const handleLogout = async () => {
+    try {
+      await fetch("/api/logout", { method: "POST" });
+    } catch {}
+    localStorage.removeItem("ws:breadcrumb");
+    router.replace("/login");
+  };
+
   const modalKind: CreateKind =
     creatingFor === "ws" ? "project" : creatingFor === "folder" ? "folder" : "file";
 
   const handleLogoClick = () => { if (collapsed) setCollapsed(false); };
-
   const showTitle = (t: string) => (t.length > 10 ? t.slice(0, 10) + "…" : t);
 
-  // 공용 아이템 렌더러: 클릭 시 브레드크럼 저장 → 라우팅
+  /* 공용 아이템 렌더러 */
   const renderItems = (key: SectionKey) =>
     sections.find(s => s.key === key)?.items?.map(it => (
       <div
@@ -164,6 +170,7 @@ export default function Sidebar() {
         <span className="inline-block h-3 w-3 rounded-sm" style={{ background: it.color ?? "#d1d5db" }} />
         <span className="truncate">{showTitle(it.title)}</span>
 
+        {/* 연필 버튼(수정) */}
         <button
           type="button"
           onClick={(e) => { e.stopPropagation(); setEditing({ section: key, id: it.id }); }}
@@ -287,13 +294,28 @@ export default function Sidebar() {
             {!collapsed && <div />}
             <img src="/icons/설정.png" alt="settings" className="h-5 w-5 opacity-80" />
             {!collapsed && <div />}
-            <img src="/icons/나가기.png" alt="logout" className="h-5 w-5 opacity-80" />
+
+            {/* 로그아웃 */}
+            <button
+              type="button"
+              onClick={handleLogout}
+              title="로그아웃"
+              aria-label="logout"
+              className="rounded p-0.5 hover:bg-neutral-100"
+            >
+              <img src="/icons/나가기.png" alt="logout" className="h-5 w-5 opacity-80" />
+            </button>
           </div>
         </div>
       </div>
 
       {/* 생성 모달 */}
-      <ProjectModal open={!!creatingFor} kind={modalKind} onClose={() => setCreatingFor(null)} onCreate={handleCreate} />
+      <ProjectModal
+        open={!!creatingFor}
+        kind={modalKind}
+        onClose={() => setCreatingFor(null)}
+        onCreate={handleCreate}
+      />
 
       {/* 수정 모달 */}
       <EditItemModal
@@ -311,7 +333,7 @@ export default function Sidebar() {
   );
 }
 
-/** 섹션 헤더 */
+/* 섹션 헤더 */
 function SectionHeader({
   title,
   open,
@@ -328,9 +350,11 @@ function SectionHeader({
   onAdd?: () => void;
 }) {
   return (
-    <div className={`group flex w-full items-center gap-2 rounded-lg px-2 py-2 text-sm ${
-      open ? "bg-blue-50 border border-blue-100" : "hover:bg-neutral-50"
-    }`}>
+    <div
+      className={`group flex w-full items-center gap-2 rounded-lg px-2 py-2 text-sm ${
+        open ? "bg-blue-50 border border-blue-100" : "hover:bg-neutral-50"
+      }`}
+    >
       <button type="button" onClick={onToggle} className="flex flex-1 items-center gap-2 text-left">
         {leftIconUrl ? (
           <img src={leftIconUrl} alt="" className="h-[18px] w-[18px]" />
