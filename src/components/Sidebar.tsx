@@ -14,7 +14,8 @@ const INITIAL_SECTIONS: Section[] = [
   {
     key: "ws",
     title: "멋사의 워크스페이스",
-    items: [
+    items: [      { id: "ws1", title: "해커톤 준비", color: "#ef4444" },
+
     ],
   },
   {

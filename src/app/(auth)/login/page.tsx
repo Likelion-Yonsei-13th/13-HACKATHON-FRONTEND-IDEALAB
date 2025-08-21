@@ -1,3 +1,4 @@
+// src/app/(auth)/login/page.tsx
 "use client";
 
 import { useRouter, useSearchParams } from "next/navigation";
@@ -6,7 +7,7 @@ import { useState } from "react";
 export default function LoginPage() {
   const router = useRouter();
   const sp = useSearchParams();
-  const next = sp.get("next") || "/ws/p1"; // 첫 화면
+  const next = sp.get("next") || "/ws/p1";
 
   const [id, setId] = useState("");
   const [pw, setPw] = useState("");
@@ -42,7 +43,7 @@ export default function LoginPage() {
       <div className="w-[360px] rounded-2xl bg-white p-6 shadow">
         <div className="flex items-center justify-center mb-6">
           <img src="/logos/IDEAL.png" className="h-7" alt="IDEA" />
-          <img src="/logos/Lab.png" className="h-7 -ml-4 relative z-10" alt="Lab" />
+          <img src="/logos/Lab.png" className="h-7 -ml-2 relative z-10" alt="Lab" />
         </div>
 
         <form onSubmit={submit} className="space-y-3">
@@ -73,14 +74,8 @@ export default function LoginPage() {
           </button>
         </form>
 
-        <div className="mt-4 text-center text-sm">
-          아직 계정이 없나요?{" "}
-          <a
-            href="/signup"
-            className="text-blue-600 hover:underline"
-          >
-            회원가입
-          </a>
+        <div className="mt-3 text-center text-sm text-neutral-600">
+          계정이 없나요? <a href="/signup" className="text-blue-600 hover:underline">회원가입</a>
         </div>
       </div>
     </div>
