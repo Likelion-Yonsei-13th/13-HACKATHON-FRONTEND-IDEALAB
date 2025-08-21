@@ -1,4 +1,4 @@
-// app/layout.tsx
+// src/app/layout.tsx
 import "./globals.css";
 import Script from "next/script";
 
@@ -17,6 +17,7 @@ export default function RootLayout({
         />
         {children}
       </body>
+      <body>{children}</body>
     </html>
   );
 }

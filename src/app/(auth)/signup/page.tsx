@@ -1,3 +1,4 @@
+// src/app/(auth)/signup/page.tsx
 "use client";
 
 import { useRouter } from "next/navigation";
@@ -8,8 +9,8 @@ export default function SignupPage() {
   const [id, setId] = useState("");
   const [pw, setPw] = useState("");
   const [pw2, setPw2] = useState("");
-  const [err, setErr] = useState("");
   const [loading, setLoading] = useState(false);
+  const [err, setErr] = useState("");
 
   const submit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -20,7 +21,6 @@ export default function SignupPage() {
     }
     setLoading(true);
     try {
-      // 데모: 서버 검증/저장 없이 200만 응답하는 API
       const r = await fetch("/api/signup", {
         method: "POST",
         headers: { "content-type": "application/json" },
@@ -32,7 +32,6 @@ export default function SignupPage() {
         setLoading(false);
         return;
       }
-      // 가입 완료 → 로그인으로
       router.replace("/login");
     } catch {
       setErr("네트워크 오류");
@@ -43,8 +42,7 @@ export default function SignupPage() {
   return (
     <div className="min-h-dvh flex items-center justify-center bg-neutral-50">
       <div className="w-[360px] rounded-2xl bg-white p-6 shadow">
-        <h1 className="text-xl font-semibold text-center mb-4">회원가입</h1>
-
+        <h2 className="text-center text-xl font-semibold mb-4">회원가입</h2>
         <form onSubmit={submit} className="space-y-3">
           <input
             className="w-full rounded-md border px-3 py-2 outline-none focus:ring-2 focus:ring-blue-400"
@@ -76,14 +74,11 @@ export default function SignupPage() {
           >
             {loading ? "처리 중..." : "가입하기"}
           </button>
-
-          <div className="text-center text-sm">
-            이미 계정이 있나요?{" "}
-            <a href="/login" className="text-blue-600 hover:underline">
-              로그인
-            </a>
-          </div>
         </form>
+
+        <div className="mt-3 text-center text-sm text-neutral-600">
+          이미 계정이 있나요? <a href="/login" className="text-blue-600 hover:underline">로그인</a>
+        </div>
       </div>
     </div>
   );

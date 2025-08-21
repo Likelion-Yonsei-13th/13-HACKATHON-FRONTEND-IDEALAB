@@ -1,50 +1,8 @@
-// app/ws/[id]/page.tsx
-"use client";
+// src/app/page.tsx
+import { cookies } from "next/headers";
+import { redirect } from "next/navigation";
 
-import { useEffect, useState } from "react";
-import { useParams } from "next/navigation";
-import Editor from "@/components/Editor";
-
-type Crumb = { section: string; title: string };
-
-export default function WorkspacePage() {
-  const params = useParams();
-  const id = (params?.id as string) ?? "";
-
-  const [crumb, setCrumb] = useState<Crumb>({ section: "내 파일", title: "제목 없는 문서" });
-
-  // 사이드바에서 저장한 브레드크럼 읽기
-  useEffect(() => {
-    try {
-      const raw = localStorage.getItem("ws:breadcrumb");
-      if (raw) {
-        const parsed = JSON.parse(raw) as Crumb;
-        // 값이 있으면 반영
-        if (parsed?.section && parsed?.title) setCrumb(parsed);
-      } else {
-        // (백업) 저장된 콘텐츠의 H1을 제목으로 쓰고 싶다면 여기서 파싱 가능
-        // const html = localStorage.getItem(`doc:${id}`) ?? "";
-        // ...
-      }
-    } catch {}
-  }, [id]);
-
-  // 상단바 높이(px). 에디터 툴바를 딱 아래에 붙이고 싶으면 이 값을 Editor에 넘김
-  const headerH = 56; // h-14
-
-  return (
-    <div className="flex-1 min-w-0">
-      {/* 상단 바: h-14 + border-b */}
-      <div className="h-14 border-b">
-        <div className="h-full flex items-center gap-2 px-6">
-          <span className="text-neutral-500">{crumb.section}</span>
-          <span className="text-neutral-300">›</span>
-          <span className="text-xl font-semibold truncate">{crumb.title}</span>
-        </div>
-      </div>
-
-      {/* TipTap Editor (툴바 포함) */}
-      <Editor docId={id} toolbarOffset={0 /* 상단바 아래에 둔 상태면 0으로 */} />
-    </div>
-  );
+export default function Home() {
+  const hasSession = !!cookies().get("session")?.value;
+  redirect(hasSession ? "/ws/p1" : "/login");
 }

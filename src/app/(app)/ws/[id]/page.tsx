@@ -1,4 +1,4 @@
-// app/(app)/ws/[id]/page.tsx
+// src/app/(app)/ws/[id]/page.tsx
 "use client";
 
 import { useEffect, useState } from "react";
@@ -43,8 +43,7 @@ export default function WorkspacePage() {
           <span className="text-xl font-semibold truncate">{crumb.title}</span>
         </div>
       </div>
-
-      <Editor docId={id} toolbarOffset={0} />
+      <Editor docId={id} toolbarOffset={0} persist={true} />
     </div>
   );
 }

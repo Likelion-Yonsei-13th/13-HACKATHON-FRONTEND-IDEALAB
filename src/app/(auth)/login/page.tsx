@@ -1,3 +1,4 @@
+// src/app/(auth)/login/page.tsx
 "use client";
 
 import { useRouter, useSearchParams } from "next/navigation";
@@ -6,7 +7,7 @@ import { useState } from "react";
 export default function LoginPage() {
   const router = useRouter();
   const sp = useSearchParams();
-  const next = sp.get("next") || "/ws/p1"; // 첫 화면
+  const next = sp.get("next") || "/ws/p1";
 
   const [id, setId] = useState("");
   const [pw, setPw] = useState("");
@@ -73,14 +74,8 @@ export default function LoginPage() {
           </button>
         </form>
 
-        <div className="mt-4 text-center text-sm">
-          아직 계정이 없나요?{" "}
-          <a
-            href="/signup"
-            className="text-blue-600 hover:underline"
-          >
-            회원가입
-          </a>
+        <div className="mt-3 text-center text-sm text-neutral-600">
+          계정이 없나요? <a href="/signup" className="text-blue-600 hover:underline">회원가입</a>
         </div>
       </div>
     </div>
