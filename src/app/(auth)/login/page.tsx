@@ -43,7 +43,7 @@ export default function LoginPage() {
       <div className="w-[360px] rounded-2xl bg-white p-6 shadow">
         <div className="flex items-center justify-center mb-6">
           <img src="/logos/IDEAL.png" className="h-7" alt="IDEA" />
-          <img src="/logos/Lab.png" className="h-7 -ml-2 relative z-10" alt="Lab" />
+          <img src="/logos/Lab.png" className="h-7 -ml-4 relative z-10" alt="Lab" />
         </div>
 
         <form onSubmit={submit} className="space-y-3">
