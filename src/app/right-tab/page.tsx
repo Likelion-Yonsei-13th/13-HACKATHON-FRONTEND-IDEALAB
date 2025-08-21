@@ -1,6 +1,7 @@
 "use client";
 import { useEffect, useState } from "react";
 import ReactMarkdown from "react-markdown";
+import MapsGraphs from "@/components/MapsGraphs";
 
 export default function RightTab() {
   const [currentDate, setCurrentDate] = useState("");
@@ -158,38 +159,7 @@ export default function RightTab() {
             구체적
           </button>
         </div>
-        {/* <div className="flex flex-row gap-2 pt-3">
-          <button
-            onClick={() => handleLocationClick("홍대 위치")}
-            className={`px-2 py-2 h-10 rounded-lg border ${
-              activeLocation === "홍대 위치"
-                ? "bg-[#0472DE] text-[#ffffff]"
-                : "bg-[#ffffff] text-[#0472DE]"
-            }`}
-          >
-            홍대 위치
-          </button>
-          <button
-            onClick={() => handleLocationClick("신촌 위치")}
-            className={`px-2 py-2 h-10 rounded-lg border ${
-              activeLocation === "신촌 위치"
-                ? "bg-[#0472DE] text-[#ffffff]"
-                : "bg-[#ffffff] text-[#0472DE]"
-            }`}
-          >
-            신촌 위치
-          </button>
-          <button
-            onClick={() => handleLocationClick("합정 위치")}
-            className={`px-2 py-2 h-10 rounded-lg border ${
-              activeLocation === "합정 위치"
-                ? "bg-[#0472DE] text-[#ffffff]"
-                : "bg-[#ffffff] text-[#0472DE]"
-            }`}
-          >
-            합정 위치
-          </button>
-        </div> */}
+        {/* 위치 버튼 */}
         <div className="flex flex-row gap-2 pt-3">
           {aiGeneratedButton.length > 0 ? (
             aiGeneratedButton.map((buttonName, index) => (
@@ -220,6 +190,7 @@ export default function RightTab() {
       {/* 지도 및 그래프 */}
       <div className="pl-5 flex-1 overflow-y-auto">
         <p>지도 및 그래프</p>
+        <MapsGraphs />
       </div>
     </main>
   );
