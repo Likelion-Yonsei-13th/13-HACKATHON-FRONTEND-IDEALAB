@@ -1,404 +1,517 @@
-// components/Sidebar.tsx
+// components/Editor.tsx
 "use client";
 
-import { useEffect, useState } from "react";
-import { useRouter } from "next/navigation";
-import ProjectModal, { NewProject, CreateKind } from "./ProjectModal";
-import EditItemModal from "./EditItemModal";
+import { useEffect } from "react";
+import { useEditor, EditorContent } from "@tiptap/react";
+import StarterKit from "@tiptap/starter-kit";
+import Placeholder from "@tiptap/extension-placeholder";
+import Underline from "@tiptap/extension-underline";
+import Link from "@tiptap/extension-link";
+import Image from "@tiptap/extension-image";
+import TaskList from "@tiptap/extension-task-list";
+import TaskItem from "@tiptap/extension-task-item";
+import TextAlign from "@tiptap/extension-text-align";
+import { Table } from "@tiptap/extension-table";
+import TableRow from "@tiptap/extension-table-row";
+import TableHeader from "@tiptap/extension-table-header";
+import TableCell from "@tiptap/extension-table-cell";
 
-type Item = { id: string; title: string; color?: string; icon?: "folder" | "file" };
-type SectionKey = "ws" | "folder" | "file";
-type Section = { key: SectionKey; title: string; items?: Item[] };
-
-const INITIAL_SECTIONS: Section[] = [
-  {
-    key: "ws",
-    title: "멋사의 워크스페이스",
-    items: [      { id: "ws1", title: "해커톤 준비", color: "#ef4444" },
-
-    ],
-  },
-  {
-    key: "folder",
-    title: "내 폴더",
-    items: [
-      { id: "f1", title: "기획/디자인", color: "#ef4444" },
-      { id: "f2", title: "프론트", color: "#eab308" },
-      { id: "f3", title: "백", color: "#60a5fa" },
-    ],
-  },
-  {
-    key: "file",
-    title: "내 파일",
-    items: [{ id: "doc", title: "문서 모음", icon: "file", color: "#60a5fa" }],
-  },
-];
-
-// 섹션 키 → 브레드크럼 라벨
-const sectionLabel = (k: SectionKey) =>
-  k === "ws" ? "멋사의 워크스페이스" : k === "folder" ? "내 폴더" : "내 파일";
-
-export default function Sidebar() {
-  const router = useRouter();
-
-  const [collapsed, setCollapsed] = useState(false);
-  const [open, setOpen] = useState<Record<SectionKey, boolean>>({
-    ws: true,
-    folder: true,
-    file: true,
-  });
-  const [sections, setSections] = useState<Section[]>(INITIAL_SECTIONS);
-
-  // 모달 상태
-  const [creatingFor, setCreatingFor] = useState<SectionKey | null>(null);
-  const [editing, setEditing] = useState<{ section: SectionKey; id: string } | null>(null);
-
-  /* 접힘 상태 유지 */
-  useEffect(() => {
-    const saved = typeof window !== "undefined" && localStorage.getItem("sidebar-collapsed");
-    if (saved) setCollapsed(saved === "1");
-  }, []);
-  useEffect(() => {
-    if (typeof window !== "undefined") {
-      localStorage.setItem("sidebar-collapsed", collapsed ? "1" : "0");
+/** 간단 throttle */
+function throttle<T extends (...a: any[]) => void>(fn: T, ms: number) {
+  let last = 0;
+  let tid: ReturnType<typeof setTimeout> | null = null;
+  return (...args: Parameters<T>) => {
+    const now = Date.now();
+    const left = ms - (now - last);
+    if (left <= 0) {
+      last = now;
+      if (tid) clearTimeout(tid);
+      fn(...args);
+    } else {
+      if (tid) clearTimeout(tid);
+      tid = setTimeout(() => {
+        last = Date.now();
+        fn(...args);
+      }, left);
     }
-  }, [collapsed]);
-
-  const toggle = (k: SectionKey) => setOpen(prev => ({ ...prev, [k]: !prev[k] }));
-
-  /* 새로 만들기 → 저장 → 즉시 이동 */
-  const handleCreate = (p: NewProject) => {
-    if (!creatingFor) return;
-
-    let createdId = "";
-
-    setSections(prev =>
-      prev.map(s => {
-        if (s.key !== creatingFor) return s;
-        const newItem: Item = {
-          id: crypto.randomUUID(),
-          title: p.title,
-          color: p.color,
-          icon: creatingFor === "file" ? "file" : undefined,
-        };
-        createdId = newItem.id;
-        return { ...s, items: [...(s.items ?? []), newItem] };
-      })
-    );
-
-    const label = sectionLabel(creatingFor);
-    // 문서/메타/브레드크럼 저장
-    localStorage.setItem(`doc:${createdId}`, "");
-    localStorage.setItem(`meta:${createdId}`, JSON.stringify({ section: label, title: p.title }));
-    localStorage.setItem("ws:breadcrumb", JSON.stringify({ section: label, title: p.title }));
-
-    setCreatingFor(null);
-    router.push(`/ws/${createdId}`);
   };
+}
 
-  /* 수정 저장: 목록 + meta:{id} 동시 반영, 열려있으면 브레드크럼도 갱신 */
-  const handleSaveEdit = (val: { title: string; color?: string }) => {
-    if (!editing) return;
+type Props = {
+  docId: string;
+  initialHTML?: string;
+  toolbarOffset?: number;
+  persist?: boolean;       // 기본 true
+  clearOnMount?: boolean;  // persist=false일 때 저장본 제거
+  toolbarTheme?: "light" | "dark";
+};
 
-    setSections(prev =>
-      prev.map(s => {
-        if (s.key !== editing.section) return s;
-        return {
-          ...s,
-          items: (s.items ?? []).map(it =>
-            it.id === editing.id ? { ...it, title: val.title, color: val.color ?? it.color } : it
-          ),
-        };
-      })
-    );
+export default function Editor({
+  docId,
+  initialHTML,
+  toolbarOffset = 0,
+  persist = true,
+  clearOnMount = false,
+  toolbarTheme = "light",
+}: Props) {
+  const editor = useEditor({
+    extensions: [
+      StarterKit.configure({
+        bulletList: { keepMarks: true },
+        orderedList: { keepMarks: true },
+        codeBlock: false,
+      }),
+      Placeholder.configure({
+        placeholder: "여기에 자유롭게 작성하세요…",
+        emptyEditorClass:
+          "before:content-[attr(data-placeholder)] before:text-neutral-400 before:float-left before:h-0 pointer-events-none",
+      }),
+      Underline,
+      Link.configure({
+        autolink: true,
+        openOnClick: true,
+        linkOnPaste: true,
+        protocols: ["http", "https", "mailto", "tel"],
+      }),
+      Image.configure({ allowBase64: true }),
+      TaskList,
+      TaskItem.configure({ nested: true }),
+      TextAlign.configure({ types: ["heading", "paragraph"] }),
+      // 표
+      Table.configure({
+        resizable: true,
+        lastColumnResizable: true,
+        HTMLAttributes: { class: "ideal-table" },
+      }),
+      TableRow,
+      TableHeader,
+      TableCell,
+    ],
+    content:
+      initialHTML ??
+      `<h1>새 문서</h1><p>여기에 자유롭게 작성해 보세요.</p>`,
+    autofocus: "end",
+    immediatelyRender: false,
+    editorProps: {
+      attributes: {
+        class:
+          "prose prose-neutral max-w-none focus:outline-none min-h-[70dvh] px-0 py-0",
+      },
+    },
+  });
 
-    try {
-      const raw = localStorage.getItem(`meta:${editing.id}`);
-      const prevMeta = raw ? JSON.parse(raw) : {};
-      localStorage.setItem(`meta:${editing.id}`, JSON.stringify({ ...prevMeta, title: val.title }));
+  // ── 저장/불러오기
+  useEffect(() => {
+    if (!editor) return;
 
-      if (location.pathname.includes(`/ws/${editing.id}`)) {
-        localStorage.setItem(
-          "ws:breadcrumb",
-          JSON.stringify({ section: sectionLabel(editing.section), title: val.title })
-        );
+    if (!persist) {
+      if (clearOnMount && typeof window !== "undefined") {
+        try {
+          window.localStorage.removeItem(`doc:${docId}`);
+        } catch {}
       }
-    } catch {}
+      return;
+    }
 
-    setEditing(null);
-  };
-
-  /* 로그아웃: 서버 세션 정리(선택) + 로그인 화면으로 이동 */
-  const handleLogout = async () => {
+    // 불러오기
     try {
-      await fetch("/api/logout", { method: "POST" });
+      const saved =
+        typeof window !== "undefined"
+          ? window.localStorage.getItem(`doc:${docId}`)
+          : null;
+      if (saved) editor.commands.setContent(saved, false);
     } catch {}
-    localStorage.removeItem("ws:breadcrumb");
-    router.replace("/login");
-  };
 
-  const modalKind: CreateKind =
-    creatingFor === "ws" ? "project" : creatingFor === "folder" ? "folder" : "file";
+    // 저장(스로틀)
+    const onUpdate = throttle(() => {
+      try {
+        const html = editor.getHTML();
+        if (typeof window !== "undefined") {
+          window.localStorage.setItem(`doc:${docId}`, html);
+        }
+      } catch {}
+    }, 300);
 
-  const handleLogoClick = () => { if (collapsed) setCollapsed(false); };
-  const showTitle = (t: string) => (t.length > 10 ? t.slice(0, 10) + "…" : t);
+    editor.on("update", onUpdate);
+    return () => editor.off("update", onUpdate);
+  }, [editor, docId, persist, clearOnMount]);
 
-  /* 공용 아이템 렌더러 */
-  const renderItems = (key: SectionKey) =>
-    sections.find(s => s.key === key)?.items?.map(it => (
-      <div
-        key={it.id}
-        role="button"
-        tabIndex={0}
-        onClick={() => {
-          const label = sectionLabel(key);
-          localStorage.setItem("ws:breadcrumb", JSON.stringify({ section: label, title: it.title }));
-          localStorage.setItem(`meta:${it.id}`, JSON.stringify({ section: label, title: it.title }));
-          router.push(`/ws/${it.id}`);
-        }}
-        onKeyDown={(e) => {
-          if (e.key === "Enter" || e.key === " ") {
-            e.preventDefault();
-            const label = sectionLabel(key);
-            localStorage.setItem("ws:breadcrumb", JSON.stringify({ section: label, title: it.title }));
-            localStorage.setItem(`meta:${it.id}`, JSON.stringify({ section: label, title: it.title }));
-            router.push(`/ws/${it.id}`);
-          }
-        }}
-        className="w-full flex items-center gap-2 rounded-md px-3 py-2 text-sm border border-neutral-200 bg-white hover:bg-neutral-50 cursor-pointer"
-        title={it.title}
-      >
-        <span className="inline-block h-3 w-3 rounded-sm" style={{ background: it.color ?? "#d1d5db" }} />
-        <span className="truncate">{showTitle(it.title)}</span>
+  // ── 행(가로) 리사이즈 핸들 설치
+  useEffect(() => {
+    if (!editor) return;
 
-        {/* 연필 버튼(수정) */}
-        <button
-          type="button"
-          onClick={(e) => { e.stopPropagation(); setEditing({ section: key, id: it.id }); }}
-          className="ml-auto inline-flex items-center justify-center"
-          aria-label="수정"
-          title="수정"
-        >
-          <img src="/icons/수정하기.png" alt="edit" className="h-4 w-4 opacity-60 hover:opacity-100" />
-        </button>
+    const installRowHandles = () => {
+      const dom = editor.view.dom as HTMLElement;
+      dom.querySelectorAll("table tr").forEach((tr) => {
+        if (tr.querySelector(".row-resize-handle")) return;
+
+        const lastCell = tr.lastElementChild as HTMLElement | null;
+        if (!lastCell) return;
+
+        const handle = document.createElement("div");
+        handle.className = "row-resize-handle";
+        lastCell.appendChild(handle);
+
+        let startY = 0;
+        let startH = tr.getBoundingClientRect().height;
+
+        const onMove = (e: MouseEvent) => {
+          const dy = e.clientY - startY;
+          const h = Math.max(24, startH + dy);
+          tr.querySelectorAll("th,td").forEach((cell) => {
+            (cell as HTMLElement).style.height = `${h}px`;
+          });
+        };
+        const onUp = () => {
+          document.removeEventListener("mousemove", onMove);
+          document.removeEventListener("mouseup", onUp);
+        };
+        handle.addEventListener("mousedown", (e) => {
+          e.preventDefault();
+          startY = e.clientY;
+          startH = tr.getBoundingClientRect().height;
+          document.addEventListener("mousemove", onMove);
+          document.addEventListener("mouseup", onUp);
+        });
+      });
+    };
+
+    installRowHandles();
+    editor.on("update", installRowHandles);
+    editor.on("selectionUpdate", installRowHandles);
+    return () => {
+      editor.off("update", installRowHandles);
+      editor.off("selectionUpdate", installRowHandles);
+    };
+  }, [editor]);
+
+  if (!editor) {
+    return (
+      <div className="min-h-[70dvh] px-8 py-8 animate-pulse text-neutral-300">
+        에디터 로딩 중…
       </div>
-    ));
+    );
+  }
 
   return (
-    <aside
-      className={[
-        "border-r bg-white shrink-0 transition-all duration-200",
-        collapsed ? "w-[60px]" : "w-[260px]",
-        "hidden md:flex",
-      ].join(" ")}
-    >
-      <div className="flex h-dvh w-full flex-col">
-        {/* 상단 바 */}
-        <div className="h-14 border-b">
-          <div className="h-full flex items-center gap-2 px-3">
-            <img src="/logos/메인로고.png" alt="app" className="h-8 w-auto" />
-            <button
-              type="button"
-              onClick={handleLogoClick}
-              className={["relative flex items-center", collapsed ? "opacity-60 hover:opacity-100" : ""].join(" ")}
-              title={collapsed ? "펼치기" : "IDEALab"}
-              aria-label="logo-expand"
-            >
-              {!collapsed && <img src="/logos/IDEAL.png" alt="IDEA" className="h-7" />}
-              {!collapsed && <img src="/logos/Lab.png" alt="Lab" className="h-7 -ml-4 relative z-10" />}
-            </button>
-            <button
-              onClick={() => setCollapsed(v => !v)}
-              className="ml-auto rounded-md p-1.5 hover:bg-neutral-100"
-              title={collapsed ? "펼치기" : "접기"}
-              aria-label="collapse"
-            >
-              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"
-                   fill="none" stroke="currentColor" strokeWidth="2"
-                   strokeLinecap="round" strokeLinejoin="round"
-                   className={["h-3.5 w-3.5", collapsed ? "" : "rotate-180"].join(" ")}>
-                <path d="m9 18 6-6-6-6" />
-              </svg>
-            </button>
-          </div>
-        </div>
-
-        {/* 워크스페이스 */}
-        <div className="px-2 pt-2">
-          <button
-            onClick={() => toggle("ws")}
-            className={["flex w-full items-center rounded-md px-2 py-2","bg-[#e7f0ff] text-slate-900 border border-[#cfe0ff]"].join(" ")}
-          >
-            <span className="mr-2 inline-block h-3 w-3 rounded-sm bg-[#3b82f6]" />
-            {!collapsed && <span className="font-medium text-sm">멋사의 워크스페이스</span>}
-            {!collapsed && (
-              <span className="ml-auto flex items-center gap-2">
-                <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"
-                     fill="none" stroke="currentColor" strokeWidth="2"
-                     strokeLinecap="round" strokeLinejoin="round"
-                     className={`h-3.5 w-3.5 ${open.ws ? "" : "rotate-180"}`}>
-                  <path d="m6 9 6 6 6-6" />
-                </svg>
-              </span>
-            )}
-          </button>
-
-          {open.ws && !collapsed && (
-            <div className="mt-1 ml-3 pl-3 border-l border-neutral-200/70 space-y-1">
-              {renderItems("ws")}
-              <button
-                className="ml-1 mt-1 text-left text-sm text-blue-600 hover:underline"
-                onClick={() => setCreatingFor("ws")}
-              >
-                + 새 프로젝트 만들기
-              </button>
-            </div>
-          )}
-        </div>
-
-        {/* 내 폴더 / 내 파일 */}
-        <nav className="flex-1 overflow-y-auto px-2 pt-2">
-          <SectionHeader
-            title="내 폴더"
-            open={open.folder}
-            onToggle={() => toggle("folder")}
-            collapsed={collapsed}
-            leftIconUrl="/icons/folder.png"
-            onAdd={() => setCreatingFor("folder")}
-          />
-          {open.folder && !collapsed && (
-            <div className="mt-1 ml-3 pl-3 border-l border-neutral-200/70 space-y-1">
-              {renderItems("folder")}
-            </div>
-          )}
-
-          <div className="mt-2" />
-          <SectionHeader
-            title="내 파일"
-            open={open.file}
-            onToggle={() => toggle("file")}
-            collapsed={collapsed}
-            leftIconUrl="/icons/file.png"
-            onAdd={() => setCreatingFor("file")}
-          />
-          {open.file && !collapsed && (
-            <div className="mt-1 ml-3 pl-3 border-l border-neutral-200/70 space-y-1">
-              {renderItems("file")}
-            </div>
-          )}
-        </nav>
-
-        {/* 하단 바 */}
-        <div className="mt-auto border-t">
-          <div className={`flex ${collapsed ? "justify-center" : "justify-between"} px-3 py-2`}>
-            <img src="/icons/사람.png" alt="me" className="h-5 w-5 opacity-80" />
-            {!collapsed && <div />}
-            <img src="/icons/설정.png" alt="settings" className="h-5 w-5 opacity-80" />
-            {!collapsed && <div />}
-
-            {/* 로그아웃 */}
-            <button
-              type="button"
-              onClick={handleLogout}
-              title="로그아웃"
-              aria-label="logout"
-              className="rounded p-0.5 hover:bg-neutral-100"
-            >
-              <img src="/icons/나가기.png" alt="logout" className="h-5 w-5 opacity-80" />
-            </button>
-          </div>
+    <div className="w-full">
+      {/* 상단 툴바 */}
+      <div className="sticky z-30 w-full border-b" style={{ top: toolbarOffset }}>
+        <div className="mx-auto w-full px-4 py-2">
+          <Toolbar editor={editor} theme={toolbarTheme} />
         </div>
       </div>
 
-      {/* 생성 모달 */}
-      <ProjectModal
-        open={!!creatingFor}
-        kind={modalKind}
-        onClose={() => setCreatingFor(null)}
-        onCreate={handleCreate}
-      />
-
-      {/* 수정 모달 */}
-      <EditItemModal
-        open={!!editing}
-        initialTitle={
-          editing ? (sections.find(s => s.key === editing.section)?.items?.find(i => i.id === editing.id)?.title ?? "") : ""
-        }
-        initialColor={
-          editing ? (sections.find(s => s.key === editing.section)?.items?.find(i => i.id === editing.id)?.color) : undefined
-        }
-        onClose={() => setEditing(null)}
-        onSave={handleSaveEdit}
-      />
-    </aside>
+      {/* 본문 */}
+      <div className="mx-auto w-full px-8 py-8">
+        <EditorContent editor={editor} />
+      </div>
+    </div>
   );
 }
 
-/* 섹션 헤더 */
-function SectionHeader({
-  title,
-  open,
-  onToggle,
-  collapsed,
-  leftIconUrl,
-  onAdd,
+/* ───────── Toolbar (PNG 아이콘 사용) ───────── */
+function Toolbar({
+  editor,
+  theme = "light",
 }: {
-  title: string;
-  open: boolean;
-  onToggle: () => void;
-  collapsed: boolean;
-  leftIconUrl?: string;
-  onAdd?: () => void;
+  editor: any;
+  theme?: "dark" | "light";
 }) {
-  return (
-    <div
-      className={`group flex w-full items-center gap-2 rounded-lg px-2 py-2 text-sm ${
-        open ? "bg-blue-50 border border-blue-100" : "hover:bg-neutral-50"
-      }`}
+  const tone =
+    theme === "dark"
+      ? "bg-neutral-900 text-neutral-100 border-neutral-800 shadow-sm"
+      : "bg-white text-neutral-900 border-neutral-200 shadow";
+
+  const btnBase =
+    "h-9 rounded-md px-2 text-sm inline-flex items-center justify-center gap-1 border transition active:scale-[.98]";
+  const btnTone =
+    theme === "dark"
+      ? "border-neutral-800 hover:bg-neutral-800/70"
+      : "border-neutral-200 hover:bg-neutral-50";
+  const activeTone = theme === "dark" ? "bg-neutral-800" : "bg-neutral-100";
+
+  const iconBtnBase =
+    "h-9 w-9 rounded-md inline-flex items-center justify-center border transition active:scale-[.98] " +
+    (theme === "dark"
+      ? "border-neutral-800 hover:bg-neutral-800/70"
+      : "border-neutral-200 hover:bg-neutral-50");
+
+  const iconClass = "h-8 w-8";
+
+  const TextBtn = ({
+    title,
+    active = false,
+    disabled = false,
+    onClick,
+    children,
+  }: any) => (
+    <button
+      type="button"
+      title={title}
+      disabled={disabled}
+      onClick={onClick}
+      className={[
+        btnBase,
+        btnTone,
+        active ? activeTone : "",
+        disabled ? "opacity-40 cursor-not-allowed" : "",
+      ].join(" ")}
     >
-      <button type="button" onClick={onToggle} className="flex flex-1 items-center gap-2 text-left">
-        {leftIconUrl ? (
-          <img src={leftIconUrl} alt="" className="h-[18px] w-[18px]" />
-        ) : (
-          <span className="inline-block h-[18px] w-[18px]" />
-        )}
-        {!collapsed && <span className="font-medium">{title}</span>}
-      </button>
-      {!collapsed && (
-        <div className="ml-auto inline-flex items-center gap-2">
-          {onAdd && (
-            <button
-              type="button"
-              onClick={(e) => { e.stopPropagation(); onAdd(); }}
-              className="inline-flex h-5 w-5 items-center justify-center rounded-sm border border-neutral-200"
-              aria-label={`${title}에 추가`}
-              title={`${title}에 추가`}
-            >
-              <span className="text-sm leading-none">+</span>
-            </button>
-          )}
-          <button
-            type="button"
-            onClick={onToggle}
-            className="inline-flex h-5 w-5 items-center justify-center"
-            aria-label="toggle"
-            title="toggle"
-          >
-            <svg
-              xmlns="http://www.w3.org/2000/svg"
-              viewBox="0 0 24 24"
-              fill="none"
-              stroke="currentColor"
-              strokeWidth="2"
-              strokeLinecap="round"
-              strokeLinejoin="round"
-              className={`h-3.5 w-3.5 ${open ? "" : "rotate-180"}`}
-            >
-              <path d="m6 9 6 6 6-6" />
-            </svg>
-          </button>
-        </div>
-      )}
+      {children}
+    </button>
+  );
+
+  const IconBtn = ({
+    title,
+    src,
+    active = false,
+    onClick,
+    disabled = false,
+  }: {
+    title: string;
+    src: string;
+    active?: boolean;
+    onClick: () => void;
+    disabled?: boolean;
+  }) => (
+    <button
+      type="button"
+      title={title}
+      aria-label={title}
+      onClick={onClick}
+      disabled={disabled}
+      className={[
+        iconBtnBase,
+        active ? activeTone : "",
+        disabled ? "opacity-40 cursor-not-allowed" : "",
+      ].join(" ")}
+    >
+      <img src={src} alt={title} className={iconClass} />
+    </button>
+  );
+
+  const Sep = () => (
+    <span
+      className={
+        theme === "dark"
+          ? "mx-1 h-5 w-px bg-neutral-800"
+          : "mx-1 h-5 w-px bg-neutral-200"
+      }
+    />
+  );
+
+  // 블록 전환
+  const setBlock = (type: string) => {
+    const c = editor.chain().focus();
+    switch (type) {
+      case "p":
+        c.setParagraph().run();
+        break;
+      case "h1":
+        c.toggleHeading({ level: 1 }).run();
+        break;
+      case "h2":
+        c.toggleHeading({ level: 2 }).run();
+        break;
+      case "h3":
+        c.toggleHeading({ level: 3 }).run();
+        break;
+      case "quote":
+        c.toggleBlockquote().run();
+        break;
+      case "code":
+        c.toggleCodeBlock().run();
+        break;
+    }
+  };
+
+  // 링크 삽입
+  const insertLink = () => {
+    const prev = editor.getAttributes("link")?.href as string | undefined;
+    const href = prompt("링크 URL을 입력하세요", prev || "https://");
+    if (href === null) return;
+    if (href === "") editor.chain().focus().unsetLink().run();
+    else editor.chain().focus().setLink({ href }).run();
+  };
+
+  // 이미지(로컬 파일 → DataURL)
+  const insertImage = () => {
+    const input = document.createElement("input");
+    input.type = "file";
+    input.accept = "image/*";
+    input.onchange = () => {
+      const file = input.files?.[0];
+      if (!file) return;
+      const reader = new FileReader();
+      reader.onload = (e) => {
+        const src = e.target?.result as string;
+        if (src) editor.chain().focus().setImage({ src }).run();
+      };
+      reader.readAsDataURL(file);
+    };
+    input.click();
+  };
+
+  // 파일 추가
+  const insertFile = () => {
+    const input = document.createElement("input");
+    input.type = "file";
+    input.onchange = () => {
+      const file = input.files?.[0];
+      if (!file) return;
+      const url = URL.createObjectURL(file);
+      editor
+        .chain()
+        .focus()
+        .insertContent(
+          `<a href="${url}" download="${file.name}" target="_blank" rel="noopener">${file.name}</a>`
+        )
+        .run();
+    };
+    input.click();
+  };
+
+  // 동영상 추가
+  const insertVideo = () => {
+    const input = document.createElement("input");
+    input.type = "file";
+    input.accept = "video/*";
+    input.onchange = () => {
+      const file = input.files?.[0];
+      if (file) {
+        const url = URL.createObjectURL(file);
+        editor
+          .chain()
+          .focus()
+          .insertContent(
+            `<video controls src="${url}" style="max-width:100%;border-radius:8px;"></video>`
+          )
+          .run();
+        return;
+      }
+      const link = prompt("동영상 URL(YouTube iframe 또는 mp4 링크)을 입력하세요");
+      if (!link) return;
+      const isIframe = link.includes("<iframe");
+      const html = isIframe
+        ? link
+        : `<video controls src="${link}" style="max-width:100%;border-radius:8px;"></video>`;
+      editor.chain().focus().insertContent(html).run();
+    };
+    input.click();
+  };
+
+  // 표 추가(3x3)
+  const insertTable = () => {
+    editor.chain().focus().insertTable({ rows: 3, cols: 3, withHeaderRow: true }).run();
+  };
+
+  return (
+    <div className={["rounded-xl border px-3 py-2 flex flex-wrap items-center gap-2", tone].join(" ")}>
+      {/* 블록 타입 */}
+      <select
+        className={[
+          "h-9 rounded-md border px-2 text-sm",
+          theme === "dark"
+            ? "bg-neutral-900 border-neutral-800 text-neutral-100"
+            : "bg-white border-neutral-200 text-neutral-900",
+        ].join(" ")}
+        value={
+          editor.isActive("heading", { level: 1 })
+            ? "h1"
+            : editor.isActive("heading", { level: 2 })
+            ? "h2"
+            : editor.isActive("heading", { level: 3 })
+            ? "h3"
+            : editor.isActive("blockquote")
+            ? "quote"
+            : editor.isActive("codeBlock")
+            ? "code"
+            : "p"
+        }
+        onChange={(e) => setBlock(e.target.value)}
+        title="블록 타입"
+      >
+        <option value="p">본문</option>
+        <option value="h1">제목 1</option>
+        <option value="h2">제목 2</option>
+        <option value="h3">제목 3</option>
+        <option value="quote">인용</option>
+        <option value="code">코드</option>
+      </select>
+
+      <Sep />
+
+      {/* 텍스트 스타일 */}
+      <TextBtn title="굵게" active={editor.isActive("bold")} onClick={() => editor.chain().focus().toggleBold().run()}>
+        <b>B</b>
+      </TextBtn>
+      <TextBtn title="기울임" active={editor.isActive("italic")} onClick={() => editor.chain().focus().toggleItalic().run()}>
+        <i>I</i>
+      </TextBtn>
+      <TextBtn title="밑줄" active={editor.isActive("underline")} onClick={() => editor.chain().focus().toggleUnderline().run()}>
+        <u>U</u>
+      </TextBtn>
+      <TextBtn title="취소선" active={editor.isActive("strike")} onClick={() => editor.chain().focus().toggleStrike().run()}>
+        <span className="line-through">S</span>
+      </TextBtn>
+
+      <Sep />
+
+      {/* 정렬 – PNG */}
+      <IconBtn
+        title="왼쪽 정렬"
+        src="/icons/좌측.png"
+        active={editor.isActive({ textAlign: "left" })}
+        onClick={() => editor.chain().focus().setTextAlign("left").run()}
+      />
+      <IconBtn
+        title="가운데 정렬"
+        src="/icons/가운데.png"
+        active={editor.isActive({ textAlign: "center" })}
+        onClick={() => editor.chain().focus().setTextAlign("center").run()}
+      />
+      <IconBtn
+        title="오른쪽 정렬"
+        src="/icons/우측.png"
+        active={editor.isActive({ textAlign: "right" })}
+        onClick={() => editor.chain().focus().setTextAlign("right").run()}
+      />
+
+      <Sep />
+
+      {/* 목록 */}
+      <IconBtn
+        title="글머리 기호"
+        src="/icons/글머리 기호.png"
+        active={editor.isActive("bulletList")}
+        onClick={() => editor.chain().focus().toggleBulletList().run()}
+      />
+      <TextBtn title="번호 목록" active={editor.isActive("orderedList")} onClick={() => editor.chain().focus().toggleOrderedList().run()}>
+        1.
+      </TextBtn>
+      <TextBtn title="할 일 목록" active={editor.isActive("taskList")} onClick={() => editor.chain().focus().toggleTaskList().run()}>
+        ☑
+      </TextBtn>
+
+      <Sep />
+
+      {/* 링크/사진/파일/동영상/표 */}
+      <IconBtn title="링크" src="/icons/링크.png" onClick={insertLink} />
+      <IconBtn title="사진 추가" src="/icons/사진.png" onClick={insertImage} />
+      <IconBtn title="파일 추가" src="/icons/파일추가.png" onClick={insertFile} />
+      <IconBtn title="동영상 추가" src="/icons/동영상.png" onClick={insertVideo} />
+      <IconBtn title="표 추가" src="/icons/표.png" onClick={insertTable} />
+
+      <Sep />
+
+      {/* 실행 취소/다시 실행 */}
+      <TextBtn title="되돌리기" onClick={() => editor.chain().focus().undo().run()}>
+        ↶
+      </TextBtn>
+      <TextBtn title="다시 실행" onClick={() => editor.chain().focus().redo().run()}>
+        ↷
+      </TextBtn>
     </div>
   );
 }
