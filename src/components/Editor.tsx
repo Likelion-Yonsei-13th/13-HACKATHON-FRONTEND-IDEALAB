@@ -813,20 +813,20 @@ function RecorderInline({
     stopTracks();
   }
 
-  const onPause = () => {
+  const handlePauseOrResume = () => {
     if (!mediaRecorderRef.current) return;
     if (status === "rec") {
-      mediaRecorderRef.current.pause();
+      // 일시정지: 실제 마이크도 끔
+      try { mediaRecorderRef.current.pause(); } catch {}
       setStatus("pause");
-      // 일시정지 시에도 마이크는 끔(요청)
       stopTracks();
     } else {
-      // 재개: 다시 마이크 요청 후 재시작
+      // 재개: 다시 시작
       start().then(() => setStatus("rec")).catch(() => setStatus("pause"));
     }
   };
 
-  const onStop = async () => {
+  const handleStop = async () => {
     setStatus("processing");
     cleanupSoft();
     stopTracks();
@@ -835,9 +835,8 @@ function RecorderInline({
     }
   };
 
-  // ✅ 내부 함수명 변경(빌드 에러 방지)
   const handleClose = async () => {
-    await onStop();
+    await handleStop();
     if (onFinish) {
       onFinish({
         audioUrl: audioUrl || "",
@@ -851,46 +850,43 @@ function RecorderInline({
 
   return (
     <div className="px-6 pt-3">
-      {/* 헤더: 제목 + (일시정지/정지/닫기) */}
-      <div className="flex items-center justify-between mb-3">
-        <div className="flex items-center gap-2">
-          <h2 className="text-xl font-bold">실시간 회의 녹음</h2>
-          <span className="text-sm text-blue-600">
-            {status === "rec" ? "녹음 중…" : status === "pause" ? "일시정지" : "처리 중…"}
-          </span>
-        </div>
-        <div className="flex items-center gap-2">
-          {/* 일시정지/재개 PNG 토글 */}
-          <button
-            onClick={onPause}
-            className="h-9 w-9 rounded-full border flex items-center justify-center"
-            title={status === "pause" ? "재개" : "일시정지"}
-          >
-            <img
-              src={status === "pause" ? "/icons/재개.png" : "/icons/일시정지.png"}
-              alt={status === "pause" ? "재개" : "일시정지"}
-              className="h-6 w-6"
-            />
-          </button>
+      {/* 헤더: 제목 + “녹음 중…” + 버튼(일시정지/정지/닫기) → 모두 왼쪽에 연달아 배치 */}
+      <div className="flex items-center gap-2 mb-3 flex-wrap">
+        <h2 className="text-xl font-bold">실시간 회의 녹음</h2>
+        <span className="text-sm text-blue-600">
+          {status === "rec" ? "녹음 중…" : status === "pause" ? "일시정지" : "처리 중…"}
+        </span>
 
-          {/* 정지 */}
-          <button
-            onClick={onStop}
-            className="h-9 w-9 rounded-full border flex items-center justify-center"
-            title="정지"
-          >
-            <img src="/icons/정지.png" alt="정지" className="h-6 w-6" />
-          </button>
+        {/* 일시정지/재개 PNG 토글 (텍스트 바로 오른쪽에) */}
+        <button
+          onClick={handlePauseOrResume}
+          className="h-9 w-9 rounded-full border flex items-center justify-center"
+          title={status === "pause" ? "재개" : "일시정지"}
+        >
+          <img
+            src={status === "pause" ? "/icons/재개.png" : "/icons/일시정지.png"}
+            alt={status === "pause" ? "재개" : "일시정지"}
+            className="h-6 w-6"
+          />
+        </button>
 
-          {/* 닫기 (텍스트) */}
-          <button
-            onClick={handleClose}
-            className="h-9 px-3 rounded-md border"
-            title="닫기"
-          >
-            닫기
-          </button>
-        </div>
+        {/* 정지 */}
+        <button
+          onClick={handleStop}
+          className="h-9 w-9 rounded-full border flex items-center justify-center"
+          title="정지"
+        >
+          <img src="/icons/정지.png" alt="정지" className="h-6 w-6" />
+        </button>
+
+        {/* 닫기 (텍스트 버튼) */}
+        <button
+          onClick={handleClose}
+          className="h-9 px-3 rounded-md border"
+          title="닫기"
+        >
+          닫기
+        </button>
       </div>
 
       {/* 본문 레이아웃 */}
