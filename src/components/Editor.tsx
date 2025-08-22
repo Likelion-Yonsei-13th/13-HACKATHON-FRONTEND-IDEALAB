@@ -152,7 +152,7 @@ export default function Editor({
   return (
     <div className="w-full">
       {/* 상단 툴바 */}
-      <div className="sticky z-30 w-full border-b" style={{ top: toolbarOffset }}>
+      <div className="sticky z-30 w-full" style={{ top: toolbarOffset }}>
         <div className="mx-auto w-full px-4 py-2">
           <Toolbar editor={editor} theme={toolbarTheme} />
         </div>
