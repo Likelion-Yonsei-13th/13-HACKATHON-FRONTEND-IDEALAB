@@ -1,5 +1,6 @@
 "use client";
 
+import { features } from "process";
 import { useEffect, useMemo, useState, JSX } from "react";
 import { Map, Polygon } from "react-kakao-maps-sdk";
 
@@ -9,8 +10,8 @@ interface MapData {
   polygons: JSX.Element[];
 }
 
-export default function MapsGraphs() {
-  const [geojsonData, setGeojsonData] = useState<any>(null);
+export default function MapsGraphs({ selectedGu }) {
+  // const [geojsonData, setGeojsonData] = useState<any>(null);
   const [isLoaded, setIsLoaded] = useState(false);
   const [sigData, setSigData] = useState<any>(null);
 
@@ -24,27 +25,10 @@ export default function MapsGraphs() {
         type: "Feature",
         properties: {
           SIG_KOR_NM: "서초구", // 'SIG.json' 파일의 'SIG_KOR_NM'과 일치하도록 수정
-          resident_population: 45000,
           district_id: "seocho-gu",
         },
       },
     ],
-  };
-
-  //색 반환 함수
-  const getColor = (population) => {
-    const color =
-      population > 50000
-        ? "#006837"
-        : population > 40000
-        ? "#31a354"
-        : population > 30000
-        ? "#78c679"
-        : population > 20000
-        ? "#c2e699"
-        : "#f7fcb9";
-
-    return color;
   };
 
   useEffect(() => {
@@ -81,7 +65,20 @@ export default function MapsGraphs() {
   }, []);
 
   useEffect(() => {
-    if (!geojsonData || !isLoaded || !sigData) return;
+    if (!isLoaded || !sigData || !selectedGu) return;
+
+    const geojsonData = {
+      type: "FeatureCollection",
+      features: [
+        {
+          type: "Feature",
+          properties: {
+            SIG_KOR_NM: selectedGu,
+            district_id: selectedGu,
+          },
+        },
+      ],
+    };
 
     const recieveGu = geojsonData.features[0].properties.SIG_KOR_NM;
 
@@ -89,7 +86,10 @@ export default function MapsGraphs() {
     const matchingFeature = sigData.features.find(
       (sigFeature: any) => sigFeature.properties.SIG_KOR_NM === recieveGu
     );
-    if (!matchingFeature) return;
+    if (!matchingFeature) {
+      console.error(`${selectedGu}에 해당하는 지역 데이터를 찾을 수 없습니다.`);
+      return;
+    }
 
     //폴리곤 그리기!!
     const polygonPaths = matchingFeature.geometry.coordinates[0].map(
@@ -123,13 +123,11 @@ export default function MapsGraphs() {
       <Polygon
         key={recieveGu}
         path={polygonPaths}
-        strokeWeight={2}
-        strokeColor="#004c80"
-        strokeOpacity={0.8}
-        fillColor={getColor(
-          geojsonData.features[0].properties.resident_population
-        )}
-        fillOpacity={0.7}
+        strokeWeight={3}
+        strokeColor="#ff0000"
+        strokeOpacity={1}
+        fillColor="#ff0000"
+        fillOpacity={0.2}
       />,
     ];
 
@@ -138,11 +136,11 @@ export default function MapsGraphs() {
       bounds: newBounds,
       polygons: newPolygons,
     });
-  }, [geojsonData, isLoaded, sigData]);
+  }, [isLoaded, sigData, selectedGu]);
 
   if (!mapData) {
     return (
-      <div className="flex justify-center items-center h-screen">
+      <div className="flex justify-center items-center h-full">
         <p>지도를 불러오는 중...</p>
       </div>
     );
@@ -154,7 +152,7 @@ export default function MapsGraphs() {
         center={mapData.center}
         // bounds={mapData.bounds}
         style={{ width: "100%", height: "100%" }}
-        level={8}
+        level={7}
       >
         {mapData.polygons}
       </Map>
