@@ -1,7 +1,7 @@
 // components/Editor.tsx
 "use client";
 
-import { useEffect } from "react";
+import { useEffect, useState, useRef } from "react";
 import { useEditor, EditorContent } from "@tiptap/react";
 import StarterKit from "@tiptap/starter-kit";
 import Placeholder from "@tiptap/extension-placeholder";
@@ -11,12 +11,12 @@ import Image from "@tiptap/extension-image";
 import TaskList from "@tiptap/extension-task-list";
 import TaskItem from "@tiptap/extension-task-item";
 import TextAlign from "@tiptap/extension-text-align";
-import {Table} from "@tiptap/extension-table";              // ✅ default import
+import { Table } from "@tiptap/extension-table";
 import TableRow from "@tiptap/extension-table-row";
 import TableHeader from "@tiptap/extension-table-header";
 import TableCell from "@tiptap/extension-table-cell";
 
-/** 간단 throttle: 마지막 실행 이후 ms 내엔 1번만 실행 */
+/* ───────── 유틸 ───────── */
 function throttle<T extends (...a: any[]) => void>(fn: T, ms: number) {
   let last = 0;
   let tid: ReturnType<typeof setTimeout> | null = null;
@@ -36,36 +36,53 @@ function throttle<T extends (...a: any[]) => void>(fn: T, ms: number) {
     }
   };
 }
+const WS_URL =
+  typeof location !== "undefined"
+    ? `${location.protocol === "https:" ? "wss" : "ws"}://${location.host}/stt/stream`
+    : "/stt/stream";
+const HTTP_CHUNK_URL = `/stt/chunk`;
+const HTTP_FINALIZE_URL = `/stt/finalize`;
 
+function pickMimeType() {
+  if (typeof MediaRecorder !== "undefined") {
+    if (MediaRecorder.isTypeSupported("audio/ogg;codecs=opus")) return "audio/ogg;codecs=opus";
+    if (MediaRecorder.isTypeSupported("audio/webm;codecs=opus")) return "audio/webm;codecs=opus";
+  }
+  return "";
+}
+function esc(s: string) {
+  return s.replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;").replaceAll('"', "&quot;");
+}
+
+/* ───────── Props ───────── */
 type Props = {
-  /** 문서 식별자(로컬스토리지 키로도 사용 가능) */
   docId: string;
-  /** 초기 HTML (없으면 기본) */
   initialHTML?: string;
-  /** sticky 툴바 오프셋(px) */
   toolbarOffset?: number;
-  /** 로컬스토리지 저장/로드 사용 (기본 true). 저장 원치 않으면 false */
+  /** 기본 false: 로컬스토리지 저장 안 함 */
   persist?: boolean;
-  /** persist=false일 때, 마운트 시 기존 저장본 제거 */
   clearOnMount?: boolean;
-  /** 툴바 테마 */
   toolbarTheme?: "light" | "dark";
+  /** 사이드바 폭(px). 녹음 패널이 이 폭만큼 왼쪽을 비워둠 */
+  sidebarWidth?: number;
 };
 
+/* ───────── 메인 Editor ───────── */
 export default function Editor({
   docId,
   initialHTML,
   toolbarOffset = 0,
-  persist = true,
+  persist = false,           // 저장 끔(요청)
   clearOnMount = false,
   toolbarTheme = "light",
+  sidebarWidth = 280,        // 레이아웃에 맞게 조정 가능
 }: Props) {
   const editor = useEditor({
     extensions: [
       StarterKit.configure({
         bulletList: { keepMarks: true },
         orderedList: { keepMarks: true },
-        codeBlock: false,
+        // ※ CodeBlock 비활성화 하지 않음(에러 원인 해결)
       }),
       Placeholder.configure({
         placeholder: "여기에 자유롭게 작성하세요…",
@@ -83,78 +100,54 @@ export default function Editor({
       TaskList,
       TaskItem.configure({ nested: true }),
       TextAlign.configure({ types: ["heading", "paragraph"] }),
-      // 표 기능
-      Table.configure({
-        resizable: true,
-        lastColumnResizable: true,
-      }),
+      Table.configure({ resizable: true, lastColumnResizable: true }),
       TableRow,
       TableHeader,
       TableCell,
     ],
-    content:
-      initialHTML ??
-      `<h1>새 문서</h1><p>여기에 자유롭게 작성해 보세요.</p>`,
+    content: initialHTML ?? `<h1>새 문서</h1><p>여기에 자유롭게 작성해 보세요.</p>`,
     autofocus: "end",
     immediatelyRender: false,
     editorProps: {
       attributes: {
-        class:
-          "prose prose-neutral max-w-none focus:outline-none min-h-[70dvh] px-0 py-0",
+        class: "prose prose-neutral max-w-none focus:outline-none min-h-[70dvh] px-0 py-0",
       },
     },
   });
 
-  // 저장/불러오기 제어
+  // 저장/불러오기 (persist=false면 skip)
   useEffect(() => {
     if (!editor) return;
-
     if (!persist) {
       if (clearOnMount && typeof window !== "undefined") {
-        try {
-          window.localStorage.removeItem(`doc:${docId}`);
-        } catch {}
+        try { window.localStorage.removeItem(`doc:${docId}`); } catch {}
       }
-      return; // 저장/불러오기 스킵
+      return;
     }
-
-    // 불러오기
     try {
-      const saved =
-        typeof window !== "undefined"
-          ? window.localStorage.getItem(`doc:${docId}`)
-          : null;
+      const saved = typeof window !== "undefined" ? window.localStorage.getItem(`doc:${docId}`) : null;
       if (saved) editor.commands.setContent(saved, false);
     } catch {}
-
-    // 저장(스로틀)
     const onUpdate = throttle(() => {
       try {
         const html = editor.getHTML();
-        if (typeof window !== "undefined") {
-          window.localStorage.setItem(`doc:${docId}`, html);
-        }
+        if (typeof window !== "undefined") window.localStorage.setItem(`doc:${docId}`, html);
       } catch {}
     }, 300);
-
     editor.on("update", onUpdate);
     return () => editor.off("update", onUpdate);
   }, [editor, docId, persist, clearOnMount]);
 
-  if (!editor) {
-    return (
-      <div className="min-h-[70dvh] px-8 py-8 animate-pulse text-neutral-300">
-        에디터 로딩 중…
-      </div>
-    );
-  }
+  const [recOpen, setRecOpen] = useState(false);
+
+  if (!editor) return <div className="min-h-[70dvh] px-8 py-8 animate-pulse text-neutral-300">에디터 로딩 중…</div>;
 
   return (
     <div className="w-full">
       {/* 상단 툴바 */}
       <div className="sticky z-30 w-full" style={{ top: toolbarOffset }}>
         <div className="mx-auto w-full px-4 py-2">
-          <Toolbar editor={editor} theme={toolbarTheme} />
+          <Toolbar editor={editor} theme={toolbarTheme} onOpenRecorder={() => setRecOpen(true)} />
         </div>
       </div>
 
@@ -162,17 +155,41 @@ export default function Editor({
       <div className="mx-auto w-full px-8 py-8">
         <EditorContent editor={editor} />
       </div>
+
+      {/* 녹음 패널(본문 영역만 덮음, 사이드바는 그대로 노출) */}
+      {recOpen && (
+        <RecorderPanel
+          sidebarWidth={sidebarWidth}
+          onClose={() => setRecOpen(false)}
+          onFinish={(p) => {
+            const html = `
+              <div class="ai-audio-note">
+                <audio controls src="${p.audioUrl}"></audio>
+                <div class="ai-summary">
+                  <p><strong>요약</strong></p>
+                  <ul>${p.summary.split(/\n+/).map((s) => `<li>${s}</li>`).join("")}</ul>
+                </div>
+                <details><summary>전체 스크립트</summary>
+                  <pre style="white-space:pre-wrap">${esc(p.transcript)}</pre>
+                </details>
+              </div>`;
+            editor.commands.insertContent(html);
+          }}
+        />
+      )}
     </div>
   );
 }
 
-/* ───────── Toolbar (요청한 PNG 아이콘만 사용) ───────── */
+/* ───────── Toolbar ───────── */
 function Toolbar({
   editor,
   theme = "light",
+  onOpenRecorder,
 }: {
   editor: any;
   theme?: "dark" | "light";
+  onOpenRecorder: () => void;
 }) {
   const tone =
     theme === "dark"
@@ -186,33 +203,20 @@ function Toolbar({
       ? "border-neutral-800 hover:bg-neutral-800/70"
       : "border-neutral-200 hover:bg-neutral-50";
   const activeTone = theme === "dark" ? "bg-neutral-800" : "bg-neutral-100";
-
   const iconBtnBase =
     "h-9 w-9 rounded-md inline-flex items-center justify-center border transition active:scale-[.98] " +
     (theme === "dark"
       ? "border-neutral-800 hover:bg-neutral-800/70"
       : "border-neutral-200 hover:bg-neutral-50");
-
   const iconClass = "h-8 w-8";
 
-  const TextBtn = ({
-    title,
-    active = false,
-    disabled = false,
-    onClick,
-    children,
-  }: any) => (
+  const TextBtn = ({ title, active = false, disabled = false, onClick, children }: any) => (
     <button
       type="button"
       title={title}
       disabled={disabled}
       onClick={onClick}
-      className={[
-        btnBase,
-        btnTone,
-        active ? activeTone : "",
-        disabled ? "opacity-40 cursor-not-allowed" : "",
-      ].join(" ")}
+      className={[btnBase, btnTone, active ? activeTone : "", disabled ? "opacity-40 cursor-not-allowed" : ""].join(" ")}
     >
       {children}
     </button>
@@ -237,52 +241,28 @@ function Toolbar({
       aria-label={title}
       onClick={onClick}
       disabled={disabled}
-      className={[
-        iconBtnBase,
-        active ? activeTone : "",
-        disabled ? "opacity-40 cursor-not-allowed" : "",
-      ].join(" ")}
+      className={[iconBtnBase, active ? activeTone : "", disabled ? "opacity-40 cursor-not-allowed" : ""].join(" ")}
     >
       <img src={src} alt={title} className={iconClass} />
     </button>
   );
 
   const Sep = () => (
-    <span
-      className={
-        theme === "dark"
-          ? "mx-1 h-5 w-px bg-neutral-800"
-          : "mx-1 h-5 w-px bg-neutral-200"
-      }
-    />
+    <span className={theme === "dark" ? "mx-1 h-5 w-px bg-neutral-800" : "mx-1 h-5 w-px bg-neutral-200"} />
   );
 
-  // 블록 전환
   const setBlock = (type: string) => {
     const c = editor.chain().focus();
     switch (type) {
-      case "p":
-        c.setParagraph().run();
-        break;
-      case "h1":
-        c.toggleHeading({ level: 1 }).run();
-        break;
-      case "h2":
-        c.toggleHeading({ level: 2 }).run();
-        break;
-      case "h3":
-        c.toggleHeading({ level: 3 }).run();
-        break;
-      case "quote":
-        c.toggleBlockquote().run();
-        break;
-      case "code":
-        c.toggleCodeBlock().run();
-        break;
+      case "p":    c.setParagraph().run(); break;
+      case "h1":   c.toggleHeading({ level: 1 }).run(); break;
+      case "h2":   c.toggleHeading({ level: 2 }).run(); break;
+      case "h3":   c.toggleHeading({ level: 3 }).run(); break;
+      case "quote":c.toggleBlockquote().run(); break;
+      case "code": c.toggleCodeBlock().run(); break; // CodeBlock 활성화됨
     }
   };
 
-  // 링크 삽입
   const insertLink = () => {
     const prev = editor.getAttributes("link")?.href as string | undefined;
     const href = prompt("링크 URL을 입력하세요", prev || "https://");
@@ -291,14 +271,11 @@ function Toolbar({
     else editor.chain().focus().setLink({ href }).run();
   };
 
-  // 이미지(로컬 파일 → DataURL)
   const insertImage = () => {
     const input = document.createElement("input");
-    input.type = "file";
-    input.accept = "image/*";
+    input.type = "file"; input.accept = "image/*";
     input.onchange = () => {
-      const file = input.files?.[0];
-      if (!file) return;
+      const file = input.files?.[0]; if (!file) return;
       const reader = new FileReader();
       reader.onload = (e) => {
         const src = e.target?.result as string;
@@ -309,81 +286,58 @@ function Toolbar({
     input.click();
   };
 
-  // 파일 추가(다운로드 링크로 삽입)
   const insertFile = () => {
     const input = document.createElement("input");
     input.type = "file";
     input.onchange = () => {
-      const file = input.files?.[0];
-      if (!file) return;
+      const file = input.files?.[0]; if (!file) return;
       const url = URL.createObjectURL(file);
-      editor
-        .chain()
-        .focus()
-        .insertContent(
-          `<a href="${url}" download="${file.name}" target="_blank" rel="noopener">${file.name}</a>`
-        )
-        .run();
+      editor.chain().focus().insertContent(
+        `<a href="${url}" download="${file.name}" target="_blank" rel="noopener">${file.name}</a>`
+      ).run();
     };
     input.click();
   };
 
-  // 동영상 추가(로컬 파일 또는 URL)
   const insertVideo = () => {
     const input = document.createElement("input");
-    input.type = "file";
-    input.accept = "video/*";
+    input.type = "file"; input.accept = "video/*";
     input.onchange = () => {
       const file = input.files?.[0];
       if (file) {
         const url = URL.createObjectURL(file);
-        editor
-          .chain()
-          .focus()
-          .insertContent(
-            `<video controls src="${url}" style="max-width:100%;border-radius:8px;"></video>`
-          )
-          .run();
+        editor.chain().focus().insertContent(
+          `<video controls src="${url}" style="max-width:100%;border-radius:8px;"></video>`
+        ).run();
         return;
       }
       const link = prompt("동영상 URL(YouTube iframe 또는 mp4 링크)을 입력하세요");
       if (!link) return;
       const isIframe = link.includes("<iframe");
-      const html = isIframe
-        ? link
-        : `<video controls src="${link}" style="max-width:100%;border-radius:8px;"></video>`;
+      const html = isIframe ? link : `<video controls src="${link}" style="max-width:100%;border-radius:8px;"></video>`;
       editor.chain().focus().insertContent(html).run();
     };
     input.click();
   };
 
-  // 표 추가(3x3 기본)
   const insertTable = () => {
     editor.chain().focus().insertTable({ rows: 3, cols: 3, withHeaderRow: true }).run();
   };
 
   return (
     <div className={["rounded-xl border px-3 py-2 flex flex-wrap items-center gap-2", tone].join(" ")}>
-      {/* 블록 타입 드롭다운 */}
+      {/* 블록 타입 */}
       <select
         className={[
           "h-9 rounded-md border px-2 text-sm",
-          theme === "dark"
-            ? "bg-neutral-900 border-neutral-800 text-neutral-100"
-            : "bg-white border-neutral-200 text-neutral-900",
+          theme === "dark" ? "bg-neutral-900 border-neutral-800 text-neutral-100" : "bg-white border-neutral-200 text-neutral-900",
         ].join(" ")}
         value={
-          editor.isActive("heading", { level: 1 })
-            ? "h1"
-            : editor.isActive("heading", { level: 2 })
-            ? "h2"
-            : editor.isActive("heading", { level: 3 })
-            ? "h3"
-            : editor.isActive("blockquote")
-            ? "quote"
-            : editor.isActive("codeBlock")
-            ? "code"
-            : "p"
+          editor.isActive("heading", { level: 1 }) ? "h1" :
+          editor.isActive("heading", { level: 2 }) ? "h2" :
+          editor.isActive("heading", { level: 3 }) ? "h3" :
+          editor.isActive("blockquote") ? "quote" :
+          editor.isActive("codeBlock") ? "code" : "p"
         }
         onChange={(e) => setBlock(e.target.value)}
         title="블록 타입"
@@ -399,75 +353,239 @@ function Toolbar({
       <Sep />
 
       {/* 텍스트 스타일 */}
-      <TextBtn title="굵게" active={editor.isActive("bold")} onClick={() => editor.chain().focus().toggleBold().run()}>
-        <b>B</b>
-      </TextBtn>
-      <TextBtn title="기울임" active={editor.isActive("italic")} onClick={() => editor.chain().focus().toggleItalic().run()}>
-        <i>I</i>
-      </TextBtn>
-      <TextBtn title="밑줄" active={editor.isActive("underline")} onClick={() => editor.chain().focus().toggleUnderline().run()}>
-        <u>U</u>
-      </TextBtn>
-      <TextBtn title="취소선" active={editor.isActive("strike")} onClick={() => editor.chain().focus().toggleStrike().run()}>
-        <span className="line-through">S</span>
-      </TextBtn>
+      <TextBtn title="굵게"   active={editor.isActive("bold")}      onClick={() => editor.chain().focus().toggleBold().run()}><b>B</b></TextBtn>
+      <TextBtn title="기울임" active={editor.isActive("italic")}    onClick={() => editor.chain().focus().toggleItalic().run()}><i>I</i></TextBtn>
+      <TextBtn title="밑줄"   active={editor.isActive("underline")} onClick={() => editor.chain().focus().toggleUnderline().run()}><u>U</u></TextBtn>
+      <TextBtn title="취소선" active={editor.isActive("strike")}    onClick={() => editor.chain().focus().toggleStrike().run()}><span className="line-through">S</span></TextBtn>
 
       <Sep />
 
-      {/* 정렬 – PNG 아이콘 (좌측/가운데/우측) */}
-      <IconBtn
-        title="왼쪽 정렬"
-        src="/icons/좌측.png"
-        active={editor.isActive({ textAlign: "left" })}
-        onClick={() => editor.chain().focus().setTextAlign("left").run()}
-      />
-      <IconBtn
-        title="가운데 정렬"
-        src="/icons/가운데.png"
-        active={editor.isActive({ textAlign: "center" })}
-        onClick={() => editor.chain().focus().setTextAlign("center").run()}
-      />
-      <IconBtn
-        title="오른쪽 정렬"
-        src="/icons/우측.png"
-        active={editor.isActive({ textAlign: "right" })}
-        onClick={() => editor.chain().focus().setTextAlign("right").run()}
-      />
+      {/* 정렬 */}
+      <IconBtn title="왼쪽 정렬"  src="/icons/좌측.png"   active={editor.isActive({ textAlign: "left" })}   onClick={() => editor.chain().focus().setTextAlign("left").run()} />
+      <IconBtn title="가운데 정렬" src="/icons/가운데.png" active={editor.isActive({ textAlign: "center" })} onClick={() => editor.chain().focus().setTextAlign("center").run()} />
+      <IconBtn title="오른쪽 정렬" src="/icons/우측.png"   active={editor.isActive({ textAlign: "right" })}  onClick={() => editor.chain().focus().setTextAlign("right").run()} />
 
       <Sep />
 
-      {/* 목록 – 글머리 기호는 PNG, 번호/할일은 텍스트 */}
-      <IconBtn
-        title="글머리 기호"
-        src="/icons/글머리 기호.png"
-        active={editor.isActive("bulletList")}
-        onClick={() => editor.chain().focus().toggleBulletList().run()}
-      />
-      <TextBtn title="번호 목록" active={editor.isActive("orderedList")} onClick={() => editor.chain().focus().toggleOrderedList().run()}>
-        1.
-      </TextBtn>
-      <TextBtn title="할 일 목록" active={editor.isActive("taskList")} onClick={() => editor.chain().focus().toggleTaskList().run()}>
-        ☑
-      </TextBtn>
+      {/* 목록 */}
+      <IconBtn title="글머리 기호" src="/icons/글머리 기호.png" active={editor.isActive("bulletList")} onClick={() => editor.chain().focus().toggleBulletList().run()} />
+      <TextBtn title="번호 목록" active={editor.isActive("orderedList")} onClick={() => editor.chain().focus().toggleOrderedList().run()}>1.</TextBtn>
+      <TextBtn title="할 일 목록" active={editor.isActive("taskList")} onClick={() => editor.chain().focus().toggleTaskList().run()}>☑</TextBtn>
 
       <Sep />
 
-      {/* 링크/사진/파일/동영상/표 – PNG 아이콘 */}
+      {/* 링크/사진/파일/동영상/표 */}
       <IconBtn title="링크" src="/icons/링크.png" onClick={insertLink} />
       <IconBtn title="사진 추가" src="/icons/사진.png" onClick={insertImage} />
       <IconBtn title="파일 추가" src="/icons/파일추가.png" onClick={insertFile} />
       <IconBtn title="동영상 추가" src="/icons/동영상.png" onClick={insertVideo} />
       <IconBtn title="표 추가" src="/icons/표.png" onClick={insertTable} />
 
-      <Sep />
+      {/* 🎤 표 추가 옆 마이크 버튼 → 녹음 패널 오픈 */}
+      <IconBtn title="녹음하기" src="/icons/마이크.png" onClick={onOpenRecorder} />
 
-      {/* 실행 취소/다시 실행 */}
-      <TextBtn title="되돌리기" onClick={() => editor.chain().focus().undo().run()}>
-        ↶
-      </TextBtn>
-      <TextBtn title="다시 실행" onClick={() => editor.chain().focus().redo().run()}>
-        ↷
-      </TextBtn>
+      {/* 오른쪽 끝으로 밀기 */}
+      <div className="ml-auto" />
+
+      {/* 되돌리기/다시 실행 → 툴바 오른쪽 끝 */}
+      <TextBtn title="되돌리기" onClick={() => editor.chain().focus().undo().run()}>↶</TextBtn>
+      <TextBtn title="다시 실행" onClick={() => editor.chain().focus().redo().run()}>↷</TextBtn>
     </div>
+  );
+}
+
+/* ───────── 녹음 패널(본문만 덮음) ───────── */
+function RecorderPanel({
+  sidebarWidth = 280,
+  onClose,
+  onFinish,
+}: {
+  sidebarWidth?: number;
+  onClose: () => void;
+  onFinish: (p: { audioUrl: string; transcript: string; summary: string }) => void;
+}) {
+  const [status, setStatus] = useState<"rec" | "pause" | "processing">("rec");
+  const [partial, setPartial] = useState("");
+  const [finals, setFinals] = useState<string[]>([]);
+  const [summary, setSummary] = useState<string | null>(null);
+  const [audioUrl, setAudioUrl] = useState<string | null>(null);
+
+  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
+  const wsRef = useRef<WebSocket | null>(null);
+  const httpStopRef = useRef<null | (() => Promise<void>)>(null);
+  const sessionIdRef = useRef<string>("");
+  const usingWSRef = useRef<boolean>(false);
+  const mimeRef = useRef<string>("");
+
+  useEffect(() => {
+    start().catch((e) => { alert("마이크 권한/연결 오류"); console.error(e); });
+    return cleanup;
+  }, []);
+
+  async function start() {
+    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    const mime = pickMimeType(); mimeRef.current = mime;
+
+    // WebSocket 우선
+    try {
+      await new Promise<void>((resolve, reject) => {
+        const codec = mime.includes("ogg") ? "ogg_opus" : mime.includes("webm") ? "webm_opus" : "unknown";
+        const ws = new WebSocket(`${WS_URL}?lang=ko&codec=${codec}`);
+        ws.binaryType = "arraybuffer";
+        wsRef.current = ws;
+        sessionIdRef.current = crypto.randomUUID();
+
+        ws.onopen = () => {
+          ws.send(JSON.stringify({ type: "start", sessionId: sessionIdRef.current, contentType: mime || "audio/webm;codecs=opus" }));
+          const mr = new MediaRecorder(stream, mime ? { mimeType: mime } : undefined);
+          mediaRecorderRef.current = mr;
+          mr.ondataavailable = (e) => { if (e.data && e.data.size > 0 && ws.readyState === WebSocket.OPEN) ws.send(e.data); };
+          mr.start(3000);
+          resolve();
+        };
+        ws.onerror = () => reject(new Error("ws-fail"));
+        ws.onmessage = (evt) => {
+          try {
+            const m = JSON.parse(evt.data);
+            if (m.type === "partial") setPartial(m.text);
+            else if (m.type === "final") setFinals((p) => [...p, m.text]);
+            else if (m.type === "summary") {
+              setSummary(m.summary);
+              setAudioUrl(m.audioUrl);
+              onFinish(m);  // 에디터에 삽입
+            }
+          } catch {}
+        };
+      });
+      usingWSRef.current = true;
+    } catch {
+      // HTTP 폴백
+      sessionIdRef.current = crypto.randomUUID();
+      const mr = new MediaRecorder(stream, mime ? { mimeType: mime } : undefined);
+      mediaRecorderRef.current = mr;
+      mr.ondataavailable = async (e) => {
+        if (!e.data || e.data.size === 0) return;
+        const fd = new FormData();
+        fd.append("audio", e.data, `chunk.${mime.includes("ogg") ? "ogg" : "webm"}`);
+        fd.append("sessionId", sessionIdRef.current);
+        fd.append("lang", "ko");
+        try {
+          const r = await fetch(HTTP_CHUNK_URL, { method: "POST", body: fd });
+          const d = await r.json(); // {partial?, final?}
+          if (d.partial) setPartial(d.partial);
+          if (d.final) setFinals((p) => [...p, d.final]);
+        } catch (err) { console.warn("청크 업로드 실패", err); }
+      };
+      mr.start(3000);
+      httpStopRef.current = async () => {
+        const r = await fetch(`${HTTP_FINALIZE_URL}?sessionId=${sessionIdRef.current}`, { method: "POST" });
+        const fin = await r.json(); // {audioUrl, transcript, summary}
+        setSummary(fin.summary);
+        setAudioUrl(fin.audioUrl);
+        onFinish(fin);
+      };
+      usingWSRef.current = false;
+    }
+  }
+
+  function cleanup() {
+    mediaRecorderRef.current?.stop();
+    mediaRecorderRef.current?.stream.getTracks().forEach((t) => t.stop());
+    if (wsRef.current && wsRef.current.readyState <= 1) wsRef.current.close();
+  }
+
+  const onPause = () => {
+    if (!mediaRecorderRef.current) return;
+    if (status === "rec") { mediaRecorderRef.current.pause(); setStatus("pause"); }
+    else { mediaRecorderRef.current.resume(); setStatus("rec"); }
+  };
+  const onStop = async () => {
+    setStatus("processing");
+    mediaRecorderRef.current?.stop();
+    mediaRecorderRef.current?.stream.getTracks().forEach((t) => t.stop());
+    if (usingWSRef.current) {
+      if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN)
+        wsRef.current.send(JSON.stringify({ type: "stop", sessionId: sessionIdRef.current }));
+      setTimeout(() => { if (wsRef.current && wsRef.current.readyState <= 1) wsRef.current.close(); }, 4000);
+    } else {
+      if (httpStopRef.current) await httpStopRef.current();
+    }
+  };
+
+  return (
+    <>
+      {/* 본문만 어둡게(사이드바는 살려둠) */}
+      <div className="fixed inset-y-0 right-0 z-40 bg-black/10" style={{ left: sidebarWidth }} />
+      {/* 레코더 패널 */}
+      <div className="fixed inset-y-0 right-0 z-50 bg-white shadow-2xl overflow-auto" style={{ left: sidebarWidth }}>
+        {/* 헤더 */}
+        <div className="sticky top-0 z-50 flex items-center justify-between px-6 py-3 border-b bg-white">
+          <div className="flex items-center gap-3">
+            <h2 className="text-xl font-bold">실시간 회의 녹음</h2>
+            <span className="text-sm text-neutral-500">
+              {status === "rec" ? "녹음 중…" : status === "pause" ? "일시정지" : "처리 중…"}
+            </span>
+          </div>
+          <div className="flex items-center gap-2">
+            <button onClick={onPause} className="h-9 px-3 rounded-md border bg-neutral-50 hover:bg-neutral-100">{status === "pause" ? "재개" : "일시정지"}</button>
+            <button onClick={onStop} className="h-9 px-3 rounded-md border bg-blue-600 text-white hover:bg-blue-700">종료 및 요약</button>
+            <button onClick={onClose} className="h-9 px-3 rounded-md border">닫기</button>
+          </div>
+        </div>
+
+        {/* 본문 레이아웃: 왼쪽 메모/받아쓰기, 오른쪽 요약 */}
+        <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 p-6">
+          {/* 좌측 */}
+          <div className="lg:col-span-1">
+            <div className="rounded-xl border p-4">
+              <div className="flex items-center justify-between mb-2">
+                <h3 className="font-semibold">메모장</h3>
+                <span className="text-sm text-neutral-400">회의 중 메모</span>
+              </div>
+              <textarea placeholder="간단 메모를 입력하세요…" className="w-full h-64 rounded-md border p-3 outline-none focus:ring-2 focus:ring-blue-200" />
+            </div>
+
+            <div className="rounded-xl border p-4 mt-6">
+              <div className="flex items-center gap-2">
+                <div className="w-2 h-2 rounded-full bg-blue-500 animate-pulse" />
+                <h3 className="font-semibold">실시간 받아쓰기</h3>
+              </div>
+              <div className="mt-2 text-sm text-neutral-600 whitespace-pre-wrap min-h-[80px]">{partial}</div>
+              {finals.length > 0 && (
+                <div className="mt-4">
+                  <h4 className="font-medium">확정 문장</h4>
+                  <ul className="list-disc list-inside text-sm text-neutral-700 mt-1 space-y-1">
+                    {finals.map((t, i) => <li key={i}>{t}</li>)}
+                  </ul>
+                </div>
+              )}
+            </div>
+          </div>
+
+          {/* 우측 */}
+          <div className="lg:col-span-2">
+            <div className="rounded-xl border p-4">
+              <div className="flex items-center gap-2">
+                <h3 className="font-semibold">실시간 회의 요약</h3>
+                <span className="text-neutral-400 text-sm">자동 생성</span>
+              </div>
+              {!summary ? (
+                <div className="text-neutral-500 text-sm mt-2">요약을 생성 중입니다… (종료를 누르면 최종 요약이 표시됩니다)</div>
+              ) : (
+                <ul className="list-disc list-inside mt-3 space-y-1">
+                  {summary.split(/\n+/).map((s, i) => <li key={i}>{s}</li>)}
+                </ul>
+              )}
+              {audioUrl && <div className="mt-4"><audio controls src={audioUrl} className="w-full" /></div>}
+            </div>
+
+            {/* 오른쪽 추가영역(지도/필터 등 필요 시) */}
+            <div className="rounded-xl border p-4 mt-6">
+              <div className="text-neutral-500 text-sm">여기에 지도/필터 등 보조 패널을 배치할 수 있어요.</div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </>
   );
 }
