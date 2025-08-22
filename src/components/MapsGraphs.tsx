@@ -1,12 +1,20 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState, JSX } from "react";
 import { Map, Polygon } from "react-kakao-maps-sdk";
 
-export default function MapsGraghs() {
-  const [geojsonData, setGeojsonData] = useState(null);
-  const [mapCenter, setMapCenter] = useState(null);
+interface MapData {
+  center: { lat: number; lng: number };
+  bounds: any;
+  polygons: JSX.Element[];
+}
+
+export default function MapsGraphs() {
+  const [geojsonData, setGeojsonData] = useState<any>(null);
   const [isLoaded, setIsLoaded] = useState(false);
+  const [sigData, setSigData] = useState<any>(null);
+
+  const [mapData, setMapData] = useState<MapData | null>(null);
 
   //백에서 받아올 가상 데이터
   const dummyGeoJSON = {
@@ -15,41 +23,9 @@ export default function MapsGraghs() {
       {
         type: "Feature",
         properties: {
-          name: "서교동",
+          SIG_KOR_NM: "서초구", // 'SIG.json' 파일의 'SIG_KOR_NM'과 일치하도록 수정
           resident_population: 45000,
-          district_id: "seogyo-dong",
-        },
-        geometry: {
-          type: "Polygon",
-          coordinates: [
-            [
-              [126.915, 37.555],
-              [126.925, 37.555],
-              [126.925, 37.565],
-              [126.915, 37.565],
-              [126.915, 37.555],
-            ],
-          ],
-        },
-      },
-      {
-        type: "Feature",
-        properties: {
-          name: "합정동",
-          resident_population: 25000,
-          district_id: "hapjeong-dong",
-        },
-        geometry: {
-          type: "Polygon",
-          coordinates: [
-            [
-              [126.905, 37.545],
-              [126.915, 37.545],
-              [126.915, 37.555],
-              [126.905, 37.555],
-              [126.905, 37.545],
-            ],
-          ],
+          district_id: "seocho-gu",
         },
       },
     ],
@@ -70,29 +46,24 @@ export default function MapsGraghs() {
 
     return color;
   };
+
   useEffect(() => {
+    //sig 파일 가져오기
+    const fetchSigData = async () => {
+      try {
+        const response = await fetch("/SIG.json");
+        const data = await response.json();
+        setSigData(data);
+      } catch (error) {
+        console.error("Failed to fetch SIG.json", error);
+      }
+    };
+    fetchSigData();
+
     //실제로는 여기서 fetch로 받아옴
 
     const timer = setTimeout(() => {
       setGeojsonData(dummyGeoJSON);
-
-      //좌표 중심 구하기
-      let totalLat = 0;
-      let totalLng = 0;
-      let coordCount = 0;
-
-      dummyGeoJSON.features.forEach((feature) => {
-        feature.geometry.coordinates[0].forEach((coord) => {
-          totalLng += coord[0];
-          totalLat += coord[1];
-          coordCount++;
-        });
-      });
-
-      const centerLng = totalLng / coordCount;
-      const centerLat = totalLat / coordCount;
-
-      setMapCenter({ lat: centerLat, lng: centerLng });
     }, 2000);
     return () => clearTimeout(timer);
   }, []);
@@ -105,36 +76,71 @@ export default function MapsGraghs() {
         });
         clearInterval(checkKakaoLoaded);
       }
-    }, []);
-
+    }, 100);
     return () => clearInterval(checkKakaoLoaded);
   }, []);
 
-  //데이터가 변경될 때 폴리곤 다시 계산
-  const polygons = useMemo(() => {
-    if (!geojsonData || !isLoaded) return [];
+  useEffect(() => {
+    if (!geojsonData || !isLoaded || !sigData) return;
 
-    return geojsonData.features.map((feature, index) => {
-      const path = feature.geometry.coordinates.map((coord) => ({
-        lat: coord,
-        lng: coord,
-      }));
+    const recieveGu = geojsonData.features[0].properties.SIG_KOR_NM;
 
-      return (
-        <Polygon
-          key={index}
-          path={path}
-          strokeWeight={2}
-          strokeColor="#004c80"
-          strokeOpacity={0.8}
-          fillColor={getColor(feature.properties.resident_population)}
-          fillOpacity={0.7}
-        />
-      );
+    //geoJSON에서 해당 구 정보 찾기
+    const matchingFeature = sigData.features.find(
+      (sigFeature: any) => sigFeature.properties.SIG_KOR_NM === recieveGu
+    );
+    if (!matchingFeature) return;
+
+    //폴리곤 그리기!!
+    const polygonPaths = matchingFeature.geometry.coordinates[0].map(
+      (coord: number[]) => ({
+        lat: coord[1],
+        lng: coord[0],
+      })
+    );
+
+    if (polygonPaths.length === 0) return;
+
+    //지도 중심 계산
+    let totalLat = 0;
+    let totalLng = 0;
+    polygonPaths.forEach((path: { lat: number; lng: number }) => {
+      totalLat += path.lat;
+      totalLng += path.lng;
     });
-  }, [geojsonData, isLoaded]);
+    const newCenter = {
+      lat: totalLat / polygonPaths.length,
+      lng: totalLng / polygonPaths.length,
+    };
 
-  if (!isLoaded || !geojsonData || !mapCenter) {
+    //줌 크기 조정
+    const newBounds = new window.kakao.maps.LatLngBounds();
+    polygonPaths.forEach((path: { lat: number; lng: number }) => {
+      newBounds.extend(new window.kakao.maps.LatLng(path.lat, path.lng));
+    });
+
+    const newPolygons = [
+      <Polygon
+        key={recieveGu}
+        path={polygonPaths}
+        strokeWeight={2}
+        strokeColor="#004c80"
+        strokeOpacity={0.8}
+        fillColor={getColor(
+          geojsonData.features[0].properties.resident_population
+        )}
+        fillOpacity={0.7}
+      />,
+    ];
+
+    setMapData({
+      center: newCenter,
+      bounds: newBounds,
+      polygons: newPolygons,
+    });
+  }, [geojsonData, isLoaded, sigData]);
+
+  if (!mapData) {
     return (
       <div className="flex justify-center items-center h-screen">
         <p>지도를 불러오는 중...</p>
@@ -145,14 +151,13 @@ export default function MapsGraghs() {
   return (
     <div className="w-full h-screen">
       <Map
-        center={mapCenter}
+        center={mapData.center}
+        // bounds={mapData.bounds}
         style={{ width: "100%", height: "100%" }}
-        level={3}
+        level={8}
       >
-        {polygons}
+        {mapData.polygons}
       </Map>
     </div>
   );
 }
-
-// 커밋이 왜 또 안될까

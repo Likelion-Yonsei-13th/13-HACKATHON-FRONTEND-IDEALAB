@@ -189,7 +189,6 @@ export default function RightTab() {
       <div className="h-full w-px bg-black"></div>
       {/* 지도 및 그래프 */}
       <div className="pl-5 flex-1 overflow-y-auto">
-        <p>지도 및 그래프</p>
         <MapsGraphs />
       </div>
     </main>
