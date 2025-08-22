@@ -187,6 +187,7 @@ export default function Sidebar() {
   return (
     <aside
       className={[
+        "sticky top-0 h-dvh",
         "border-r bg-white shrink-0 transition-all duration-200",
         collapsed ? "w-[60px]" : "w-[260px]",
         "hidden md:flex",
