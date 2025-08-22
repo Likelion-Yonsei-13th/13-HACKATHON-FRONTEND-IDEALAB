@@ -1,7 +1,7 @@
 // components/Editor.tsx
 "use client";
 
-import { useEffect, useState, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useEditor, EditorContent } from "@tiptap/react";
 import StarterKit from "@tiptap/starter-kit";
 import Placeholder from "@tiptap/extension-placeholder";
@@ -18,22 +18,11 @@ import TableCell from "@tiptap/extension-table-cell";
 
 /* ───────── 유틸 ───────── */
 function throttle<T extends (...a: any[]) => void>(fn: T, ms: number) {
-  let last = 0;
-  let tid: ReturnType<typeof setTimeout> | null = null;
+  let last = 0, tid: ReturnType<typeof setTimeout> | null = null;
   return (...args: Parameters<T>) => {
-    const now = Date.now();
-    const left = ms - (now - last);
-    if (left <= 0) {
-      last = now;
-      if (tid) clearTimeout(tid);
-      fn(...args);
-    } else {
-      if (tid) clearTimeout(tid);
-      tid = setTimeout(() => {
-        last = Date.now();
-        fn(...args);
-      }, left);
-    }
+    const now = Date.now(), left = ms - (now - last);
+    if (left <= 0) { last = now; if (tid) clearTimeout(tid); fn(...args); }
+    else { if (tid) clearTimeout(tid); tid = setTimeout(() => { last = Date.now(); fn(...args); }, left); }
   };
 }
 const WS_URL =
@@ -59,11 +48,9 @@ type Props = {
   docId: string;
   initialHTML?: string;
   toolbarOffset?: number;
-  /** 기본 false: 로컬스토리지 저장 안 함 */
   persist?: boolean;
   clearOnMount?: boolean;
   toolbarTheme?: "light" | "dark";
-  /** 사이드바 폭(px). 녹음 패널이 이 폭만큼 왼쪽을 비워둠 */
   sidebarWidth?: number;
 };
 
@@ -72,17 +59,16 @@ export default function Editor({
   docId,
   initialHTML,
   toolbarOffset = 0,
-  persist = false,           // 저장 끔(요청)
+  persist = false,
   clearOnMount = false,
   toolbarTheme = "light",
-  sidebarWidth = 280,        // 레이아웃에 맞게 조정 가능
+  sidebarWidth = 280,
 }: Props) {
   const editor = useEditor({
     extensions: [
       StarterKit.configure({
         bulletList: { keepMarks: true },
         orderedList: { keepMarks: true },
-        // ※ CodeBlock 비활성화 하지 않음(에러 원인 해결)
       }),
       Placeholder.configure({
         placeholder: "여기에 자유롭게 작성하세요…",
@@ -90,12 +76,7 @@ export default function Editor({
           "before:content-[attr(data-placeholder)] before:text-neutral-400 before:float-left before:h-0 pointer-events-none",
       }),
       Underline,
-      Link.configure({
-        autolink: true,
-        openOnClick: true,
-        linkOnPaste: true,
-        protocols: ["http", "https", "mailto", "tel"],
-      }),
+      Link.configure({ autolink: true, openOnClick: true, linkOnPaste: true }),
       Image.configure({ allowBase64: true }),
       TaskList,
       TaskItem.configure({ nested: true }),
@@ -108,14 +89,10 @@ export default function Editor({
     content: initialHTML ?? `<h1>새 문서</h1><p>여기에 자유롭게 작성해 보세요.</p>`,
     autofocus: "end",
     immediatelyRender: false,
-    editorProps: {
-      attributes: {
-        class: "prose prose-neutral max-w-none focus:outline-none min-h-[70dvh] px-0 py-0",
-      },
-    },
+    editorProps: { attributes: { class: "prose prose-neutral max-w-none focus:outline-none min-h-[70dvh] px-0 py-0" } },
   });
 
-  // 저장/불러오기 (persist=false면 skip)
+  // (옵션) 로컬스토리지 persist
   useEffect(() => {
     if (!editor) return;
     if (!persist) {
@@ -156,7 +133,7 @@ export default function Editor({
         <EditorContent editor={editor} />
       </div>
 
-      {/* 녹음 패널(본문 영역만 덮음, 사이드바는 그대로 노출) */}
+      {/* 녹음 패널 */}
       {recOpen && (
         <RecorderPanel
           sidebarWidth={sidebarWidth}
@@ -181,7 +158,7 @@ export default function Editor({
   );
 }
 
-/* ───────── Toolbar ───────── */
+/* ───────── Toolbar: 텍스트 버튼 + 특정 항목만 PNG ───────── */
 function Toolbar({
   editor,
   theme = "light",
@@ -191,6 +168,19 @@ function Toolbar({
   theme?: "dark" | "light";
   onOpenRecorder: () => void;
 }) {
+  const [tableBarOpen, setTableBarOpen] = useState(false);
+  const [showTableModal, setShowTableModal] = useState(false);
+  const [rows, setRows] = useState(3);
+  const [cols, setCols] = useState(3);
+
+  // ✅ 표 선택 상태에 따라 2줄 툴바 자동 열기/닫기 (다른 표 클릭 시 다시 열림)
+  useEffect(() => {
+    if (!editor) return;
+    const handler = () => setTableBarOpen(editor.isActive("table"));
+    editor.on("selectionUpdate", handler);
+    return () => editor.off("selectionUpdate", handler); // ← 고친 부분
+  }, [editor]);
+
   const tone =
     theme === "dark"
       ? "bg-neutral-900 text-neutral-100 border-neutral-800 shadow-sm"
@@ -205,9 +195,7 @@ function Toolbar({
   const activeTone = theme === "dark" ? "bg-neutral-800" : "bg-neutral-100";
   const iconBtnBase =
     "h-9 w-9 rounded-md inline-flex items-center justify-center border transition active:scale-[.98] " +
-    (theme === "dark"
-      ? "border-neutral-800 hover:bg-neutral-800/70"
-      : "border-neutral-200 hover:bg-neutral-50");
+    (theme === "dark" ? "border-neutral-800 hover:bg-neutral-800/70" : "border-neutral-200 hover:bg-neutral-50");
   const iconClass = "h-8 w-8";
 
   const TextBtn = ({ title, active = false, disabled = false, onClick, children }: any) => (
@@ -221,20 +209,9 @@ function Toolbar({
       {children}
     </button>
   );
-
   const IconBtn = ({
-    title,
-    src,
-    active = false,
-    onClick,
-    disabled = false,
-  }: {
-    title: string;
-    src: string;
-    active?: boolean;
-    onClick: () => void;
-    disabled?: boolean;
-  }) => (
+    title, src, active = false, onClick, disabled = false,
+  }: { title: string; src: string; active?: boolean; onClick: () => void; disabled?: boolean }) => (
     <button
       type="button"
       title={title}
@@ -246,20 +223,17 @@ function Toolbar({
       <img src={src} alt={title} className={iconClass} />
     </button>
   );
-
-  const Sep = () => (
-    <span className={theme === "dark" ? "mx-1 h-5 w-px bg-neutral-800" : "mx-1 h-5 w-px bg-neutral-200"} />
-  );
+  const Sep = () => <span className={theme === "dark" ? "mx-1 h-5 w-px bg-neutral-800" : "mx-1 h-5 w-px bg-neutral-200"} />;
 
   const setBlock = (type: string) => {
     const c = editor.chain().focus();
     switch (type) {
-      case "p":    c.setParagraph().run(); break;
-      case "h1":   c.toggleHeading({ level: 1 }).run(); break;
-      case "h2":   c.toggleHeading({ level: 2 }).run(); break;
-      case "h3":   c.toggleHeading({ level: 3 }).run(); break;
-      case "quote":c.toggleBlockquote().run(); break;
-      case "code": c.toggleCodeBlock().run(); break; // CodeBlock 활성화됨
+      case "p": c.setParagraph().run(); break;
+      case "h1": c.toggleHeading({ level: 1 }).run(); break;
+      case "h2": c.toggleHeading({ level: 2 }).run(); break;
+      case "h3": c.toggleHeading({ level: 3 }).run(); break;
+      case "quote": c.toggleBlockquote().run(); break;
+      case "code": c.toggleCodeBlock().run(); break;
     }
   };
 
@@ -270,7 +244,6 @@ function Toolbar({
     if (href === "") editor.chain().focus().unsetLink().run();
     else editor.chain().focus().setLink({ href }).run();
   };
-
   const insertImage = () => {
     const input = document.createElement("input");
     input.type = "file"; input.accept = "image/*";
@@ -285,7 +258,6 @@ function Toolbar({
     };
     input.click();
   };
-
   const insertFile = () => {
     const input = document.createElement("input");
     input.type = "file";
@@ -298,7 +270,6 @@ function Toolbar({
     };
     input.click();
   };
-
   const insertVideo = () => {
     const input = document.createElement("input");
     input.type = "file"; input.accept = "video/*";
@@ -306,9 +277,7 @@ function Toolbar({
       const file = input.files?.[0];
       if (file) {
         const url = URL.createObjectURL(file);
-        editor.chain().focus().insertContent(
-          `<video controls src="${url}" style="max-width:100%;border-radius:8px;"></video>`
-        ).run();
+        editor.chain().focus().insertContent(`<video controls src="${url}" style="max-width:100%;border-radius:8px;"></video>`).run();
         return;
       }
       const link = prompt("동영상 URL(YouTube iframe 또는 mp4 링크)을 입력하세요");
@@ -320,81 +289,146 @@ function Toolbar({
     input.click();
   };
 
-  const insertTable = () => {
-    editor.chain().focus().insertTable({ rows: 3, cols: 3, withHeaderRow: true }).run();
+  const deleteTableAndClose = () => {
+    editor.chain().focus().deleteTable().run();
+    setTableBarOpen(false); // 삭제 시 닫기
   };
 
+  /* ── 1줄: 기본 툴바 ── */
   return (
-    <div className={["rounded-xl border px-3 py-2 flex flex-wrap items-center gap-2", tone].join(" ")}>
-      {/* 블록 타입 */}
-      <select
-        className={[
-          "h-9 rounded-md border px-2 text-sm",
-          theme === "dark" ? "bg-neutral-900 border-neutral-800 text-neutral-100" : "bg-white border-neutral-200 text-neutral-900",
-        ].join(" ")}
-        value={
-          editor.isActive("heading", { level: 1 }) ? "h1" :
-          editor.isActive("heading", { level: 2 }) ? "h2" :
-          editor.isActive("heading", { level: 3 }) ? "h3" :
-          editor.isActive("blockquote") ? "quote" :
-          editor.isActive("codeBlock") ? "code" : "p"
-        }
-        onChange={(e) => setBlock(e.target.value)}
-        title="블록 타입"
-      >
-        <option value="p">본문</option>
-        <option value="h1">제목 1</option>
-        <option value="h2">제목 2</option>
-        <option value="h3">제목 3</option>
-        <option value="quote">인용</option>
-        <option value="code">코드</option>
-      </select>
+    <>
+      <div className={["rounded-xl border px-3 py-2 flex flex-wrap items-center gap-2", tone].join(" ")}>
+        {/* 블록 타입 */}
+        <select
+          className={[
+            "h-9 rounded-md border px-2 text-sm",
+            theme === "dark" ? "bg-neutral-900 border-neutral-800 text-neutral-100" : "bg-white border-neutral-200 text-neutral-900",
+          ].join(" ")}
+          value={
+            editor.isActive("heading", { level: 1 }) ? "h1" :
+            editor.isActive("heading", { level: 2 }) ? "h2" :
+            editor.isActive("heading", { level: 3 }) ? "h3" :
+            editor.isActive("blockquote") ? "quote" :
+            editor.isActive("codeBlock") ? "code" : "p"
+          }
+          onChange={(e) => setBlock(e.target.value)}
+          title="블록 타입"
+        >
+          <option value="p">본문</option>
+          <option value="h1">제목 1</option>
+          <option value="h2">제목 2</option>
+          <option value="h3">제목 3</option>
+          <option value="quote">인용</option>
+          <option value="code">코드</option>
+        </select>
 
-      <Sep />
+        <Sep />
 
-      {/* 텍스트 스타일 */}
-      <TextBtn title="굵게"   active={editor.isActive("bold")}      onClick={() => editor.chain().focus().toggleBold().run()}><b>B</b></TextBtn>
-      <TextBtn title="기울임" active={editor.isActive("italic")}    onClick={() => editor.chain().focus().toggleItalic().run()}><i>I</i></TextBtn>
-      <TextBtn title="밑줄"   active={editor.isActive("underline")} onClick={() => editor.chain().focus().toggleUnderline().run()}><u>U</u></TextBtn>
-      <TextBtn title="취소선" active={editor.isActive("strike")}    onClick={() => editor.chain().focus().toggleStrike().run()}><span className="line-through">S</span></TextBtn>
+        {/* 텍스트(텍스트 버튼 유지) */}
+        <TextBtn title="굵게"   active={editor.isActive("bold")}      onClick={() => editor.chain().focus().toggleBold().run()}><b>B</b></TextBtn>
+        <TextBtn title="기울임" active={editor.isActive("italic")}    onClick={() => editor.chain().focus().toggleItalic().run()}><i>I</i></TextBtn>
+        <TextBtn title="밑줄"   active={editor.isActive("underline")} onClick={() => editor.chain().focus().toggleUnderline().run()}><u>U</u></TextBtn>
+        <TextBtn title="취소선" active={editor.isActive("strike")}    onClick={() => editor.chain().focus().toggleStrike().run()}><span className="line-through">S</span></TextBtn>
 
-      <Sep />
+        <Sep />
 
-      {/* 정렬 */}
-      <IconBtn title="왼쪽 정렬"  src="/icons/좌측.png"   active={editor.isActive({ textAlign: "left" })}   onClick={() => editor.chain().focus().setTextAlign("left").run()} />
-      <IconBtn title="가운데 정렬" src="/icons/가운데.png" active={editor.isActive({ textAlign: "center" })} onClick={() => editor.chain().focus().setTextAlign("center").run()} />
-      <IconBtn title="오른쪽 정렬" src="/icons/우측.png"   active={editor.isActive({ textAlign: "right" })}  onClick={() => editor.chain().focus().setTextAlign("right").run()} />
+        {/* 정렬 (PNG) */}
+        <IconBtn title="왼쪽 정렬"   src="/icons/좌측.png"   active={editor.isActive({ textAlign: "left" })}   onClick={() => editor.chain().focus().setTextAlign("left").run()} />
+        <IconBtn title="가운데 정렬" src="/icons/가운데.png" active={editor.isActive({ textAlign: "center" })} onClick={() => editor.chain().focus().setTextAlign("center").run()} />
+        <IconBtn title="오른쪽 정렬" src="/icons/우측.png"   active={editor.isActive({ textAlign: "right" })}  onClick={() => editor.chain().focus().setTextAlign("right").run()} />
 
-      <Sep />
+        <Sep />
 
-      {/* 목록 */}
-      <IconBtn title="글머리 기호" src="/icons/글머리 기호.png" active={editor.isActive("bulletList")} onClick={() => editor.chain().focus().toggleBulletList().run()} />
-      <TextBtn title="번호 목록" active={editor.isActive("orderedList")} onClick={() => editor.chain().focus().toggleOrderedList().run()}>1.</TextBtn>
-      <TextBtn title="할 일 목록" active={editor.isActive("taskList")} onClick={() => editor.chain().focus().toggleTaskList().run()}>☑</TextBtn>
+        {/* 목록: 글머리(아이콘), 번호/할일(텍스트) */}
+        <IconBtn title="글머리 기호" src="/icons/글머리 기호.png" active={editor.isActive("bulletList")} onClick={() => editor.chain().focus().toggleBulletList().run()} />
+        <TextBtn title="번호 목록" active={editor.isActive("orderedList")} onClick={() => editor.chain().focus().toggleOrderedList().run()}>1.</TextBtn>
+        <TextBtn title="할 일 목록" active={editor.isActive("taskList")} onClick={() => editor.chain().focus().toggleTaskList().run()}>☑</TextBtn>
 
-      <Sep />
+        <Sep />
 
-      {/* 링크/사진/파일/동영상/표 */}
-      <IconBtn title="링크" src="/icons/링크.png" onClick={insertLink} />
-      <IconBtn title="사진 추가" src="/icons/사진.png" onClick={insertImage} />
-      <IconBtn title="파일 추가" src="/icons/파일추가.png" onClick={insertFile} />
-      <IconBtn title="동영상 추가" src="/icons/동영상.png" onClick={insertVideo} />
-      <IconBtn title="표 추가" src="/icons/표.png" onClick={insertTable} />
+        {/* 삽입 (PNG) */}
+        <IconBtn title="링크"     src="/icons/링크.png"     onClick={insertLink} />
+        <IconBtn title="사진"     src="/icons/사진.png"     onClick={insertImage} />
+        <IconBtn title="파일 추가" src="/icons/파일추가.png" onClick={insertFile} />
+        <IconBtn title="동영상"   src="/icons/동영상.png"   onClick={insertVideo} />
 
-      {/* 🎤 표 추가 옆 마이크 버튼 → 녹음 패널 오픈 */}
-      <IconBtn title="녹음하기" src="/icons/마이크.png" onClick={onOpenRecorder} />
+        {/* 표 버튼 → 모달 열기 (PNG) */}
+        <IconBtn title="표"       src="/icons/표.png"       onClick={() => setShowTableModal(true)} />
 
-      {/* 오른쪽 끝으로 밀기 */}
-      <div className="ml-auto" />
+        {/* 마이크 (PNG) */}
+        <IconBtn title="녹음하기" src="/icons/마이크.png"   onClick={onOpenRecorder} />
 
-      {/* 되돌리기/다시 실행 → 툴바 오른쪽 끝 */}
-      <TextBtn title="되돌리기" onClick={() => editor.chain().focus().undo().run()}>↶</TextBtn>
-      <TextBtn title="다시 실행" onClick={() => editor.chain().focus().redo().run()}>↷</TextBtn>
-    </div>
+        {/* 오른쪽 끝으로 밀기 */}
+        <div className="ml-auto" />
+
+        {/* 되돌리기/다시 실행 (텍스트) */}
+        <TextBtn title="되돌리기" onClick={() => editor.chain().focus().undo().run()}>↶</TextBtn>
+        <TextBtn title="다시 실행" onClick={() => editor.chain().focus().redo().run()}>↷</TextBtn>
+      </div>
+
+      {/* ── 2줄: 표 전용 툴바(표 안에 커서가 있을 때 자동 표시) ── */}
+      {tableBarOpen && editor.isActive("table") && (
+        <div className={["mt-2 rounded-xl border px-3 py-2 flex flex-wrap items-center gap-2", tone].join(" ")}>
+          <span className="text-sm opacity-60 mr-1">표 편집</span>
+          <TextBtn title="행↑+" onClick={() => editor.chain().focus().addRowBefore().run()}>행↑+</TextBtn>
+          <TextBtn title="행↓+" onClick={() => editor.chain().focus().addRowAfter().run()}>행↓+</TextBtn>
+          <TextBtn title="행−"  onClick={() => editor.chain().focus().deleteRow().run()}>행−</TextBtn>
+          <Sep />
+          <TextBtn title="열←+" onClick={() => editor.chain().focus().addColumnBefore().run()}>열←+</TextBtn>
+          <TextBtn title="열→+" onClick={() => editor.chain().focus().addColumnAfter().run()}>열→+</TextBtn>
+          <TextBtn title="열−"  onClick={() => editor.chain().focus().deleteColumn().run()}>열−</TextBtn>
+          <Sep />
+          <TextBtn title="헤더" onClick={() => editor.chain().focus().toggleHeaderRow().run()}>헤더</TextBtn>
+          <TextBtn title="표 삭제" onClick={deleteTableAndClose}>표 삭제</TextBtn>
+        </div>
+      )}
+
+      {/* ── 표 만들기 모달 ── */}
+      {showTableModal && (
+        <div className="fixed inset-0 z-[60] bg-black/30 flex items-center justify-center">
+          <div className={`rounded-xl border bg-white p-5 w-[320px] ${theme === "dark" ? "text-neutral-100 bg-neutral-900 border-neutral-800" : ""}`}>
+            <h3 className="text-lg font-semibold">표 만들기</h3>
+
+            <div className="mt-4 space-y-3">
+              <label className="flex items-center justify-between">
+                <span>행 개수</span>
+                <input
+                  type="number" min={1} value={rows}
+                  onChange={(e) => setRows(Math.max(1, Number(e.target.value) || 1))}
+                  className="w-24 rounded-md border px-2 py-1"
+                />
+              </label>
+              <label className="flex items-center justify-between">
+                <span>열 개수</span>
+                <input
+                  type="number" min={1} value={cols}
+                  onChange={(e) => setCols(Math.max(1, Number(e.target.value) || 1))}
+                  className="w-24 rounded-md border px-2 py-1"
+                />
+              </label>
+            </div>
+
+            <div className="mt-5 flex justify-end gap-2">
+              <button onClick={() => setShowTableModal(false)} className="h-9 px-3 rounded-md border">취소</button>
+              <button
+                onClick={() => {
+                  editor.chain().focus().insertTable({ rows, cols, withHeaderRow: true }).run();
+                  setShowTableModal(false);
+                  setTableBarOpen(true); // 생성 직후 2줄 툴바 열기
+                }}
+                className="h-9 px-3 rounded-md border bg-blue-600 text-white hover:bg-blue-700"
+              >
+                확인
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+    </>
   );
 }
 
-/* ───────── 녹음 패널(본문만 덮음) ───────── */
+/* ───────── 녹음 패널: 본문만 덮음(사이드바 유지) ───────── */
 function RecorderPanel({
   sidebarWidth = 280,
   onClose,
@@ -417,10 +451,7 @@ function RecorderPanel({
   const usingWSRef = useRef<boolean>(false);
   const mimeRef = useRef<string>("");
 
-  useEffect(() => {
-    start().catch((e) => { alert("마이크 권한/연결 오류"); console.error(e); });
-    return cleanup;
-  }, []);
+  useEffect(() => { start().catch((e) => { alert("마이크 권한/연결 오류"); console.error(e); }); return cleanup; }, []);
 
   async function start() {
     const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
@@ -434,14 +465,12 @@ function RecorderPanel({
         ws.binaryType = "arraybuffer";
         wsRef.current = ws;
         sessionIdRef.current = crypto.randomUUID();
-
         ws.onopen = () => {
           ws.send(JSON.stringify({ type: "start", sessionId: sessionIdRef.current, contentType: mime || "audio/webm;codecs=opus" }));
           const mr = new MediaRecorder(stream, mime ? { mimeType: mime } : undefined);
           mediaRecorderRef.current = mr;
           mr.ondataavailable = (e) => { if (e.data && e.data.size > 0 && ws.readyState === WebSocket.OPEN) ws.send(e.data); };
-          mr.start(3000);
-          resolve();
+          mr.start(3000); resolve();
         };
         ws.onerror = () => reject(new Error("ws-fail"));
         ws.onmessage = (evt) => {
@@ -449,11 +478,7 @@ function RecorderPanel({
             const m = JSON.parse(evt.data);
             if (m.type === "partial") setPartial(m.text);
             else if (m.type === "final") setFinals((p) => [...p, m.text]);
-            else if (m.type === "summary") {
-              setSummary(m.summary);
-              setAudioUrl(m.audioUrl);
-              onFinish(m);  // 에디터에 삽입
-            }
+            else if (m.type === "summary") { setSummary(m.summary); setAudioUrl(m.audioUrl); onFinish(m); }
           } catch {}
         };
       });
@@ -471,7 +496,7 @@ function RecorderPanel({
         fd.append("lang", "ko");
         try {
           const r = await fetch(HTTP_CHUNK_URL, { method: "POST", body: fd });
-          const d = await r.json(); // {partial?, final?}
+          const d = await r.json();
           if (d.partial) setPartial(d.partial);
           if (d.final) setFinals((p) => [...p, d.final]);
         } catch (err) { console.warn("청크 업로드 실패", err); }
@@ -533,9 +558,9 @@ function RecorderPanel({
           </div>
         </div>
 
-        {/* 본문 레이아웃: 왼쪽 메모/받아쓰기, 오른쪽 요약 */}
+        {/* 본문 레이아웃 */}
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 p-6">
-          {/* 좌측 */}
+          {/* 좌측: 메모/받아쓰기 */}
           <div className="lg:col-span-1">
             <div className="rounded-xl border p-4">
               <div className="flex items-center justify-between mb-2">
@@ -546,7 +571,7 @@ function RecorderPanel({
             </div>
 
             <div className="rounded-xl border p-4 mt-6">
-              <div className="flex items-center gap-2">
+              <div className="flex itemsanager gap-2">
                 <div className="w-2 h-2 rounded-full bg-blue-500 animate-pulse" />
                 <h3 className="font-semibold">실시간 받아쓰기</h3>
               </div>
@@ -562,7 +587,7 @@ function RecorderPanel({
             </div>
           </div>
 
-          {/* 우측 */}
+          {/* 우측: 요약/오디오 */}
           <div className="lg:col-span-2">
             <div className="rounded-xl border p-4">
               <div className="flex items-center gap-2">
@@ -579,7 +604,6 @@ function RecorderPanel({
               {audioUrl && <div className="mt-4"><audio controls src={audioUrl} className="w-full" /></div>}
             </div>
 
-            {/* 오른쪽 추가영역(지도/필터 등 필요 시) */}
             <div className="rounded-xl border p-4 mt-6">
               <div className="text-neutral-500 text-sm">여기에 지도/필터 등 보조 패널을 배치할 수 있어요.</div>
             </div>
