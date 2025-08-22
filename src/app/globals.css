@@ -112,3 +112,16 @@ body {
   cursor: row-resize;
 }
 .prose tr:hover .row-resize-handle { opacity: .6; }
+
+
+.breadcrumb {
+  position: sticky;
+  top: 0;              /* 화면 맨 위에 고정 */
+  background: #fff;    /* 내용이 스크롤될 때 가려지지 않도록 흰 배경 */
+  z-index: 100;        /* 툴바보다 위에 올라오도록 */
+  padding: 8px 12px;
+}
+
+.toolbar {
+  border-bottom: none !important; 
+}
