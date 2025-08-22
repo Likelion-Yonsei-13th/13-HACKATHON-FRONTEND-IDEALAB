@@ -1,10 +1,15 @@
 "use client";
+
 import { useEffect, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import MapsGraphs from "@/components/MapsGraphs";
+import GuSelect from "@/components/GuSelect";
+import CategorySelector from "@/components/CategorySelect";
+import Image from "next/image";
 
-export default function RightTab() {
+export default function RightTab({ backendGu }) {
   const [currentDate, setCurrentDate] = useState("");
+  const [selectedGu, setSelectedGu] = useState(backendGu || "서대문구");
 
   useEffect(() => {
     const today = new Date();
@@ -24,23 +29,29 @@ export default function RightTab() {
   const [activeLocation, setActiveLocation] = useState("");
   const [fetchedData, setFetchedData] = useState(null); //api로 받아온 데이터 저장
 
+  useEffect(() => {
+    if (backendGu && backendGu !== selectedGu) {
+      setSelectedGu(backendGu);
+    }
+  }, [backendGu]);
+
   // const handleLocationClick = (locationName) => {
   //   setActiveLocation(locationName);
   // };
 
   const dummyData = {
-    "홍대 위치": {
-      title: "홍대 위치",
+    신촌: {
+      title: "신촌",
       content:
         "### 홍대: 문화, 트렌드, 유동인구의 중심\n\n- **핵심 키워드**: 문화 예술, 젊음, 빠른 트렌드\n- **주요 고객**: 20~30대, 외국인 관광객\n- **창업 시 장점**: 강력한 SNS 파급력, 다양한 유동인구\n- **유의점**: 높은 임대료, 치열한 경쟁, 유행 주기 짧음",
     },
-    "신촌 위치": {
-      title: "신촌 위치",
+    성수: {
+      title: "성수",
       content:
         "### 신촌: 학생과 젊은 층의 활기찬 상권\n\n- **핵심 키워드**: 대학가, 활기, 복합 문화\n- **주요 고객**: 대학생, 10~20대\n- **창업 시 장점**: 꾸준한 수요, 새로운 아이디어 수용적\n- **유의점**: 빠른 유행 변화, 복잡한 골목 상권",
     },
-    "합정 위치": {
-      title: "합정 위치",
+    강남: {
+      title: "강남",
       content:
         "### 합정: 개성 있고 트렌디한 감성 상권\n\n- **핵심 키워드**: 독립적, 감성적, 예술적\n- **주요 고객**: 20~30대, 직장인, 커플\n- **창업 시 장점**: 개성 있는 분위기, 높은 SNS 노출\n- **유의점**: 홍대/신촌 대비 낮은 유동인구, 높은 임대료",
     },
@@ -84,6 +95,7 @@ export default function RightTab() {
     const timer = setTimeout(() => {
       setAiGeneratedButton(buttonNames);
       setActiveAiButton(buttonNames[0]);
+      setActiveLocation(buttonNames[0]);
     }, 3000);
 
     return () => clearTimeout(timer);
@@ -95,9 +107,9 @@ export default function RightTab() {
   };
 
   return (
-    <main className="flex flex-row h-screen gap-2">
+    <main className="flex flex-col h-screen gap-2">
       {/* 회의록 */}
-      <div className="pl-5 flex-1 overflow-y-auto">
+      {/* <div className="pl-5 flex-1 overflow-y-auto">
         <h1 className="pt-5 font-semibold text-[30px]">{currentDate} 회의</h1>
         <h3 className="pt-5 text-[20px]">오늘 회의할 내용</h3>
         <div className="pl-2 pt-1">
@@ -122,12 +134,48 @@ export default function RightTab() {
           </ul>
         </div>
       </div>
-      <div className="h-full w-px bg-black"></div>
+      <div className="h-full w-px bg-black"></div> */}
 
-      {/* ai 정보 제공 */}
-      <div className="pl-5 flex-1 overflow-y-auto">
-        <p className="pt-5 text-[15px] text-[#A5A6B9]">AI 정보 제공</p>
-        <div className="flex flex-row gap-2 pt-3">
+      {/* 상단 버튼 */}
+      <div>
+        <div className="flex flex-row pt-5 gap-2 pl-8">
+          <p className="text-[14px] text-[#A5A6B9]">AI 정보 제공</p>
+          <Image src="/aiInfo.svg" height={20} width={20} alt="안내" />
+          <Image src="/aiInformation.png" height={17} width={500} alt="안내" />
+        </div>
+        {/* 위치 버튼 */}
+        <div className="flex flex-row gap-2 pt-3 pl-10">
+          {aiGeneratedButton.length > 0 ? (
+            aiGeneratedButton.map((buttonName, index) => (
+              <button
+                key={index}
+                onClick={() => handleButtonClick(buttonName)}
+                className={`px-3 py-2 h-10 rounded-lg border ${
+                  activeAiButton === buttonName
+                    ? "bg-[#0472DE] text-[#ffffff]"
+                    : "bg-[#ffffff] text-[#0472DE]"
+                }`}
+              >
+                {buttonName}
+              </button>
+            ))
+          ) : (
+            <p>AI가 버튼을 생성하는 중입니다...</p>
+          )}
+        </div>
+        {/* 사용자 선택 바 */}
+        <div className="pl-8 pt-3 flex flex-row gap-2">
+          {/* 지역선택 */}
+          <div className="relative z-20">
+            <GuSelect selectedGu={selectedGu} onGuChange={setSelectedGu} />
+          </div>
+          {/* 업종선택 */}
+          <div className="flex items-start justify-center">
+            <CategorySelector />
+          </div>
+        </div>
+
+        {/* <div className="flex flex-row gap-2 pt-3">
           <button
             onClick={() => handleInfoClick("전체")}
             className={`flex h-8 py-[1px] px-4 justify-center items-center gap-[-8px] rounded-[32px] border ${
@@ -158,38 +206,20 @@ export default function RightTab() {
           >
             구체적
           </button>
-        </div>
-        {/* 위치 버튼 */}
-        <div className="flex flex-row gap-2 pt-3">
-          {aiGeneratedButton.length > 0 ? (
-            aiGeneratedButton.map((buttonName, index) => (
-              <button
-                key={index}
-                onClick={() => handleButtonClick(buttonName)}
-                className={`px-2 py-2 h-10 rounded-lg border ${
-                  activeAiButton === buttonName
-                    ? "bg-[#0472DE] text-[#ffffff]"
-                    : "bg-[#ffffff] text-[#0472DE]"
-                }`}
-              >
-                {buttonName}
-              </button>
-            ))
-          ) : (
-            <p>AI가 내용을 생성하는 중입니다...</p>
-          )}
-        </div>
+        </div> */}
+      </div>
+      {/* 지도 및 그래프 */}
+      <div className="flex px-12 py-7 relative z-10">
+        <MapsGraphs selectedGu={selectedGu} />
+      </div>
+      {/* ai 정보 제공 */}
+      <div>
         {fetchedData && (
           <div className="pt-5 prose pr-2">
             {/* <h2>{fetchedData.title}</h2> */}
             <ReactMarkdown>{fetchedData.content}</ReactMarkdown>
           </div>
         )}
-      </div>
-      <div className="h-full w-px bg-black"></div>
-      {/* 지도 및 그래프 */}
-      <div className="pl-5 flex-1 overflow-y-auto">
-        <MapsGraphs />
       </div>
     </main>
   );
