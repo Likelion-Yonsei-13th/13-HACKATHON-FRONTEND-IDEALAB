@@ -1,7 +1,7 @@
-// src/components/Editor.tsx
+// File: src/components/Editor.tsx
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useEditor, EditorContent } from "@tiptap/react";
 import StarterKit from "@tiptap/starter-kit";
 import Placeholder from "@tiptap/extension-placeholder";
@@ -16,41 +16,74 @@ import TableRow from "@tiptap/extension-table-row";
 import TableHeader from "@tiptap/extension-table-header";
 import TableCell from "@tiptap/extension-table-cell";
 
+import RecorderPanel from "./RecorderPanel";
+
 /* ───────── 유틸 ───────── */
 function throttle<T extends (...a: any[]) => void>(fn: T, ms: number) {
-  let last = 0, tid: ReturnType<typeof setTimeout> | null = null;
+  let last = 0,
+    tid: ReturnType<typeof setTimeout> | null = null;
   return (...args: Parameters<T>) => {
-    const now = Date.now(), left = ms - (now - last);
-    if (left <= 0) { last = now; if (tid) clearTimeout(tid); fn(...args); }
-    else { if (tid) clearTimeout(tid); tid = setTimeout(() => { last = Date.now(); fn(...args); }, left); }
+    const now = Date.now(),
+      left = ms - (now - last);
+    if (left <= 0) {
+      last = now;
+      if (tid) clearTimeout(tid);
+      fn(...args);
+    } else {
+      if (tid) clearTimeout(tid);
+      tid = setTimeout(() => {
+        last = Date.now();
+        fn(...args);
+      }, left);
+    }
   };
 }
 
-const WS_URL =
-  typeof location !== "undefined"
-    ? `${location.protocol === "https:" ? "wss" : "ws"}://${location.host}/stt/stream`
-    : "/stt/stream";
-const HTTP_CHUNK_URL = `/stt/chunk`;
-const HTTP_FINALIZE_URL = `/stt/finalize`;
-
-function pickMimeType() {
-  if (typeof MediaRecorder !== "undefined") {
-    if (MediaRecorder.isTypeSupported("audio/ogg;codecs=opus")) return "audio/ogg;codecs=opus";
-    if (MediaRecorder.isTypeSupported("audio/webm;codecs=opus")) return "audio/webm;codecs=opus";
-  }
-  return "";
+// 디바운스(최신 호출만 수행, flush/cancel 지원)
+function debounce<T extends (...a: any[]) => void>(fn: T, ms: number) {
+  let t: ReturnType<typeof setTimeout> | null = null;
+  let lastArgs: any[] | null = null;
+  const wrapped: any = (...args: any[]) => {
+    lastArgs = args;
+    if (t) clearTimeout(t);
+    t = setTimeout(() => {
+      const a = lastArgs;
+      lastArgs = null;
+      t = null;
+      // @ts-ignore
+      fn(...(a ?? []));
+    }, ms);
+  };
+  wrapped.flush = () => {
+    if (t) {
+      clearTimeout(t);
+      t = null;
+      if (lastArgs) {
+        // @ts-ignore
+        fn(...lastArgs);
+        lastArgs = null;
+      }
+    }
+  };
+  wrapped.cancel = () => {
+    if (t) clearTimeout(t);
+    t = null;
+    lastArgs = null;
+  };
+  return wrapped as T & { flush: () => void; cancel: () => void };
 }
+
 function esc(s: string) {
   return s.replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;").replaceAll('"', "&quot;");
 }
 
 /* ───────── Props ───────── */
-type Props = {
+export type EditorProps = {
   docId: string;
   initialHTML?: string;
-  toolbarOffset?: number;         // 상단 고정 헤더 높이
-  persist?: boolean;              // 로컬 저장
-  clearOnMount?: boolean;
+  toolbarOffset?: number; // 상단 고정 헤더 높이
+  persist?: boolean; // (무시) 로컬 저장 제거
+  clearOnMount?: boolean; // (무시)
   toolbarTheme?: "light" | "dark";
 };
 
@@ -59,10 +92,9 @@ export default function Editor({
   docId,
   initialHTML,
   toolbarOffset = 0,
-  persist = false,
-  clearOnMount = false,
+  // persist/clearOnMount는 무시(호환)
   toolbarTheme = "light",
-}: Props) {
+}: EditorProps) {
   const editor = useEditor({
     extensions: [
       StarterKit.configure({
@@ -85,49 +117,57 @@ export default function Editor({
       TableHeader,
       TableCell,
     ],
-    content:
-      initialHTML ??
-      `<h1>새 문서</h1><p>여기에 자유롭게 작성해 보세요.</p>`,
+    content: initialHTML ?? `<h1>새 문서</h1><p>여기에 자유롭게 작성해 보세요.</p>`,
     autofocus: "end",
     immediatelyRender: false,
     editorProps: {
       attributes: {
-        class:
-          "prose prose-neutral max-w-none focus:outline-none min-h-[70dvh] px-0 py-0",
+        class: "prose prose-neutral max-w-none focus:outline-none min-h-[70dvh] px-0 py-0",
       },
     },
   });
 
-  // 로컬 저장
+  // ───────── 백엔드 자동 저장 (디바운스 + Abort) ─────────
+  const saveCtrlRef = useRef<AbortController | null>(null);
+  const saveToServer = useMemo(
+    () =>
+      debounce(async (html: string) => {
+        try {
+          if (saveCtrlRef.current) saveCtrlRef.current.abort();
+          const ctrl = new AbortController();
+          saveCtrlRef.current = ctrl;
+          await fetch(`/api/docs/${encodeURIComponent(docId)}`, {
+            method: "PUT",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ html }),
+            signal: ctrl.signal,
+          });
+        } catch (e: any) {
+          if (e?.name === "AbortError") return; // 최신 요청만 유지
+          console.warn("자동 저장 실패", e);
+        }
+      }, 800),
+    [docId]
+  );
+
   useEffect(() => {
     if (!editor) return;
-    if (!persist) {
-      if (clearOnMount && typeof window !== "undefined") {
-        try {
-          window.localStorage.removeItem(`doc:${docId}`);
-        } catch {}
-      }
-      return;
-    }
-    try {
-      const saved =
-        typeof window !== "undefined"
-          ? window.localStorage.getItem(`doc:${docId}`)
-          : null;
-      if (saved) editor.commands.setContent(saved, false);
-    } catch {}
     const onUpdate = throttle(() => {
       try {
         const html = editor.getHTML();
-        if (typeof window !== "undefined")
-          window.localStorage.setItem(`doc:${docId}`, html);
+        saveToServer(html);
       } catch {}
-    }, 300);
+    }, 120);
     editor.on("update", onUpdate);
+
+    // 언마운트 시 보류된 저장 즉시 수행
     return () => {
-      // tiptap v2의 on()은 반환값이 없음 → 해제 불가. editor가 unmount되며 정리됨.
+      try {
+        // @ts-ignore
+        saveToServer.flush?.();
+      } catch {}
     };
-  }, [editor, docId, persist, clearOnMount]);
+  }, [editor, saveToServer]);
 
   const [recOpen, setRecOpen] = useState(false);
 
@@ -144,26 +184,18 @@ export default function Editor({
       {!recOpen && (
         <div className="sticky z-30 w-full" style={{ top: toolbarOffset }}>
           <div className="mx-auto w-full px-4 py-2">
-            <Toolbar
-              editor={editor}
-              theme={toolbarTheme}
-              onOpenRecorder={() => setRecOpen(true)}
-            />
+            <Toolbar editor={editor} theme={toolbarTheme} onOpenRecorder={() => setRecOpen(true)} />
           </div>
         </div>
       )}
 
-      {/* 본문 */}
+      {/* 본문 또는 녹음창 (교대 표시) */}
       <div className="mx-auto w-full px-8 py-8">
-        <EditorContent editor={editor} />
-      </div>
-
-      {/* 녹음 패널 (워크스페이스 영역에 고정, 툴바 숨김) */}
-      {recOpen && (
-        <RecorderInline
-          onClose={() => setRecOpen(false)}
-          onFinish={(p) => {
-            const html = `
+        {recOpen ? (
+          <RecorderPanel
+            onClose={() => setRecOpen(false)}
+            onFinish={(p) => {
+              const html = `
               <div class="ai-audio-note">
                 <audio controls src="${p.audioUrl}"></audio>
                 <div class="ai-summary">
@@ -177,10 +209,17 @@ export default function Editor({
                   <pre style="white-space:pre-wrap">${esc(p.transcript)}</pre>
                 </details>
               </div>`;
-            editor.commands.insertContent(html);
-          }}
-        />
-      )}
+              editor.commands.insertContent(html);
+              try {
+                // @ts-ignore
+                saveToServer.flush?.();
+              } catch {}
+            }}
+          />
+        ) : (
+          <EditorContent editor={editor} />
+        )}
+      </div>
     </div>
   );
 }
@@ -214,35 +253,22 @@ function Toolbar({
   const btnBase =
     "h-9 rounded-md px-2 text-sm inline-flex items-center justify-center gap-1 border transition active:scale-[.98]";
   const btnTone =
-    theme === "dark"
-      ? "border-neutral-800 hover:bg-neutral-800/70"
-      : "border-neutral-200 hover:bg-neutral-50";
+    theme === "dark" ? "border-neutral-800 hover:bg-neutral-800/70" : "border-neutral-200 hover:bg-neutral-50";
   const activeTone = theme === "dark" ? "bg-neutral-800" : "bg-neutral-100";
   const iconBtnBase =
     "h-9 w-9 rounded-md inline-flex items-center justify-center border transition active:scale-[.98] " +
-    (theme === "dark"
-      ? "border-neutral-800 hover:bg-neutral-800/70"
-      : "border-neutral-200 hover:bg-neutral-50");
+    (theme === "dark" ? "border-neutral-800 hover:bg-neutral-800/70" : "border-neutral-200 hover:bg-neutral-50");
   const iconClass = "h-8 w-8";
 
-  const TextBtn = ({
-    title,
-    active = false,
-    disabled = false,
-    onClick,
-    children,
-  }: any) => (
+  const TextBtn = ({ title, active = false, disabled = false, onClick, children }: any) => (
     <button
       type="button"
       title={title}
       disabled={disabled}
       onClick={onClick}
-      className={[
-        btnBase,
-        btnTone,
-        active ? activeTone : "",
-        disabled ? "opacity-40 cursor-not-allowed" : "",
-      ].join(" ")}
+      className={[btnBase, btnTone, active ? activeTone : "", disabled ? "opacity-40 cursor-not-allowed" : ""].join(
+        " "
+      )}
     >
       {children}
     </button>
@@ -266,21 +292,13 @@ function Toolbar({
       aria-label={title}
       onClick={onClick}
       disabled={disabled}
-      className={[
-        iconBtnBase,
-        active ? activeTone : "",
-        disabled ? "opacity-40 cursor-not-allowed" : "",
-      ].join(" ")}
+      className={[iconBtnBase, active ? activeTone : "", disabled ? "opacity-40 cursor-not-allowed" : ""].join(" ")}
     >
       <img src={src} alt={title} className={iconClass} />
     </button>
   );
   const Sep = () => (
-    <span
-      className={
-        theme === "dark" ? "mx-1 h-5 w-px bg-neutral-800" : "mx-1 h-5 w-px bg-neutral-200"
-      }
-    />
+    <span className={theme === "dark" ? "mx-1 h-5 w-px bg-neutral-800" : "mx-1 h-5 w-px bg-neutral-200"} />
   );
 
   const setBlock = (type: string) => {
@@ -378,19 +396,12 @@ function Toolbar({
   /* ── 1줄: 기본 툴바 ── */
   return (
     <>
-      <div
-        className={[
-          "rounded-xl border px-3 py-2 flex flex-wrap items-center gap-2",
-          tone,
-        ].join(" ")}
-      >
+      <div className={["rounded-xl border px-3 py-2 flex flex-wrap items-center gap-2", tone].join(" ")}>
         {/* 블록 타입 */}
         <select
           className={[
             "h-9 rounded-md border px-2 text-sm",
-            theme === "dark"
-              ? "bg-neutral-900 border-neutral-800 text-neutral-100"
-              : "bg-white border-neutral-200 text-neutral-900",
+            theme === "dark" ? "bg-neutral-900 border-neutral-800 text-neutral-100" : "bg-white border-neutral-200 text-neutral-900",
           ].join(" ")}
           value={
             editor.isActive("heading", { level: 1 })
@@ -419,78 +430,34 @@ function Toolbar({
         <Sep />
 
         {/* 텍스트(텍스트 버튼 유지) */}
-        <TextBtn
-          title="굵게"
-          active={editor.isActive("bold")}
-          onClick={() => editor.chain().focus().toggleBold().run()}
-        >
+        <TextBtn title="굵게" active={editor.isActive("bold")} onClick={() => editor.chain().focus().toggleBold().run()}>
           <b>B</b>
         </TextBtn>
-        <TextBtn
-          title="기울임"
-          active={editor.isActive("italic")}
-          onClick={() => editor.chain().focus().toggleItalic().run()}
-        >
+        <TextBtn title="기울임" active={editor.isActive("italic")} onClick={() => editor.chain().focus().toggleItalic().run()}>
           <i>I</i>
         </TextBtn>
-        <TextBtn
-          title="밑줄"
-          active={editor.isActive("underline")}
-          onClick={() => editor.chain().focus().toggleUnderline().run()}
-        >
+        <TextBtn title="밑줄" active={editor.isActive("underline")} onClick={() => editor.chain().focus().toggleUnderline().run()}>
           <u>U</u>
         </TextBtn>
-        <TextBtn
-          title="취소선"
-          active={editor.isActive("strike")}
-          onClick={() => editor.chain().focus().toggleStrike().run()}
-        >
+        <TextBtn title="취소선" active={editor.isActive("strike")} onClick={() => editor.chain().focus().toggleStrike().run()}>
           <span className="line-through">S</span>
         </TextBtn>
 
         <Sep />
 
         {/* 정렬 (PNG) */}
-        <IconBtn
-          title="왼쪽 정렬"
-          src="/icons/좌측.png"
-          active={editor.isActive({ textAlign: "left" })}
-          onClick={() => editor.chain().focus().setTextAlign("left").run()}
-        />
-        <IconBtn
-          title="가운데 정렬"
-          src="/icons/가운데.png"
-          active={editor.isActive({ textAlign: "center" })}
-          onClick={() => editor.chain().focus().setTextAlign("center").run()}
-        />
-        <IconBtn
-          title="오른쪽 정렬"
-          src="/icons/우측.png"
-          active={editor.isActive({ textAlign: "right" })}
-          onClick={() => editor.chain().focus().setTextAlign("right").run()}
-        />
+        <IconBtn title="왼쪽 정렬" src="/icons/좌측.png" active={editor.isActive({ textAlign: "left" })} onClick={() => editor.chain().focus().setTextAlign("left").run()} />
+        <IconBtn title="가운데 정렬" src="/icons/가운데.png" active={editor.isActive({ textAlign: "center" })} onClick={() => editor.chain().focus().setTextAlign("center").run()} />
+        <IconBtn title="오른쪽 정렬" src="/icons/우측.png" active={editor.isActive({ textAlign: "right" })} onClick={() => editor.chain().focus().setTextAlign("right").run()} />
 
         <Sep />
 
         {/* 목록: 글머리(아이콘), 번호/할일(텍스트 유지) */}
-        <IconBtn
-          title="글머리 기호"
-          src="/icons/글머리 기호.png"
-          active={editor.isActive("bulletList")}
-          onClick={() => editor.chain().focus().toggleBulletList().run()}
-        />
-        <TextBtn
-          title="번호 목록"
-          active={editor.isActive("orderedList")}
-          onClick={() => editor.chain().focus().toggleOrderedList().run()}
-        >
+        <IconBtn title="글머리 기호" src="/icons/글머리 기호.png" active={editor.isActive("bulletList")} onClick={() => editor.chain().focus().toggleBulletList().run()} />
+        <TextBtn title="번호 목록" active={editor.isActive("orderedList")} onClick={() => editor.chain().focus().toggleOrderedList().run()}>
           1.
         </TextBtn>
-        <TextBtn
-          title="할 일 목록"
-          active={editor.isActive("taskList")}
-          onClick={() => editor.chain().focus().toggleTaskList().run()}
-        >
+        <TextBtn title="할 일 목록" active={editor.isActive("taskList")} onClick={() => editor.chain().focus().toggleTaskList().run()}>
           ☑
         </TextBtn>
 
@@ -503,94 +470,51 @@ function Toolbar({
         <IconBtn title="동영상" src="/icons/동영상.png" onClick={insertVideo} />
 
         {/* 표 버튼 → 모달 열기 (PNG) */}
-        <IconBtn
-          title="표"
-          src="/icons/표.png"
-          onClick={() => setShowTableModal(true)}
-        />
+        <IconBtn title="표" src="/icons/표.png" onClick={() => setShowTableModal(true)} />
 
         {/* 🎤 마이크 버튼(표 옆, PNG 하나만) */}
-        <IconBtn
-          title="녹음 시작"
-          src="/icons/마이크.png"
-          onClick={onOpenRecorder}
-        />
+        <IconBtn title="녹음 시작" src="/icons/마이크.png" onClick={onOpenRecorder} />
 
         {/* 오른쪽 끝으로 밀기 */}
         <div className="ml-auto" />
 
         {/* 되돌리기/다시 실행 (텍스트 유지) */}
-        <TextBtn
-          title="되돌리기"
-          onClick={() => editor.chain().focus().undo().run()}
-        >
+        <TextBtn title="되돌리기" onClick={() => editor.chain().focus().undo().run()}>
           ↶
         </TextBtn>
-        <TextBtn
-          title="다시 실행"
-          onClick={() => editor.chain().focus().redo().run()}
-        >
+        <TextBtn title="다시 실행" onClick={() => editor.chain().focus().redo().run()}>
           ↷
         </TextBtn>
       </div>
 
       {/* 2줄: 표 전용 툴바 */}
       {tableBarOpen && editor.isActive("table") && (
-        <div
-          className={[
-            "mt-2 rounded-xl border px-3 py-2 flex flex-wrap items-center gap-2",
-            tone,
-          ].join(" ")}
-        >
+        <div className={["mt-2 rounded-xl border px-3 py-2 flex flex-wrap items-center gap-2", tone].join(" ")}>
           <span className="text-sm opacity-60 mr-1">표 편집</span>
-          <TextBtn
-            title="행↑+"
-            onClick={() => editor.chain().focus().addRowBefore().run()}
-          >
+          <TextBtn title="행↑+" onClick={() => editor.chain().focus().addRowBefore().run()}>
             행↑+
           </TextBtn>
-          <TextBtn
-            title="행↓+"
-            onClick={() => editor.chain().focus().addRowAfter().run()}
-          >
+          <TextBtn title="행↓+" onClick={() => editor.chain().focus().addRowAfter().run()}>
             행↓+
           </TextBtn>
-          <TextBtn
-            title="행−"
-            onClick={() => editor.chain().focus().deleteRow().run()}
-          >
+          <TextBtn title="행−" onClick={() => editor.chain().focus().deleteRow().run()}>
             행−
           </TextBtn>
           <Sep />
-          <TextBtn
-            title="열←+"
-            onClick={() => editor.chain().focus().addColumnBefore().run()}
-          >
+          <TextBtn title="열←+" onClick={() => editor.chain().focus().addColumnBefore().run()}>
             열←+
           </TextBtn>
-          <TextBtn
-            title="열→+"
-            onClick={() => editor.chain().focus().addColumnAfter().run()}
-          >
+          <TextBtn title="열→+" onClick={() => editor.chain().focus().addColumnAfter().run()}>
             열→+
           </TextBtn>
-          <TextBtn
-            title="열−"
-            onClick={() => editor.chain().focus().deleteColumn().run()}
-          >
+          <TextBtn title="열−" onClick={() => editor.chain().focus().deleteColumn().run()}>
             열−
           </TextBtn>
           <Sep />
-          <TextBtn
-            title="헤더"
-            onClick={() => editor.chain().focus().toggleHeaderRow().run()}
-          >
+          <TextBtn title="헤더" onClick={() => editor.chain().focus().toggleHeaderRow().run()}>
             헤더
           </TextBtn>
-          <TextBtn
-            title="표 삭제"
-            onClick={() => editor.chain().focus().deleteTable().run()}
-          >
+          <TextBtn title="표 삭제" onClick={() => editor.chain().focus().deleteTable().run()}>
             표 삭제
           </TextBtn>
         </div>
@@ -600,11 +524,7 @@ function Toolbar({
       {showTableModal && (
         <div className="fixed inset-0 z-[60] bg-black/30 flex items-center justify-center">
           <div
-            className={`rounded-xl border bg-white p-5 w-[320px] ${
-              theme === "dark"
-                ? "text-neutral-100 bg-neutral-900 border-neutral-800"
-                : ""
-            }`}
+            className={`rounded-xl border bg-white p-5 w-[320px] ${theme === "dark" ? "text-neutral-100 bg-neutral-900 border-neutral-800" : ""}`}
           >
             <h3 className="text-lg font-semibold">표 만들기</h3>
 
@@ -615,9 +535,7 @@ function Toolbar({
                   type="number"
                   min={1}
                   value={rows}
-                  onChange={(e) =>
-                    setRows(Math.max(1, Number(e.target.value) || 1))
-                  }
+                  onChange={(e) => setRows(Math.max(1, Number(e.target.value) || 1))}
                   className="w-24 rounded-md border px-2 py-1"
                 />
               </label>
@@ -627,9 +545,7 @@ function Toolbar({
                   type="number"
                   min={1}
                   value={cols}
-                  onChange={(e) =>
-                    setCols(Math.max(1, Number(e.target.value) || 1))
-                  }
+                  onChange={(e) => setCols(Math.max(1, Number(e.target.value) || 1))}
                   className="w-24 rounded-md border px-2 py-1"
                 />
               </label>
@@ -640,19 +556,12 @@ function Toolbar({
             </div>
 
             <div className="mt-5 flex justify-end gap-2">
-              <button
-                onClick={() => setShowTableModal(false)}
-                className="h-9 px-3 rounded-md border"
-              >
+              <button onClick={() => setShowTableModal(false)} className="h-9 px-3 rounded-md border">
                 취소
               </button>
               <button
                 onClick={() => {
-                  editor
-                    .chain()
-                    .focus()
-                    .insertTable({ rows, cols, withHeaderRow: true })
-                    .run();
+                  editor.chain().focus().insertTable({ rows, cols, withHeaderRow: true }).run();
                   setShowTableModal(false);
                   setTableBarOpen(true);
                 }}
@@ -665,298 +574,5 @@ function Toolbar({
         </div>
       )}
     </>
-  );
-}
-
-/* ───────── 녹음 패널(인라인, 사이드바와 함께 동작) ───────── */
-function RecorderInline({
-  onClose,
-  onFinish,
-}: {
-  onClose: () => void;
-  onFinish: (p: { audioUrl: string; transcript: string; summary: string }) => void;
-}) {
-  const [status, setStatus] = useState<"rec" | "pause" | "processing">("rec");
-  const [partial, setPartial] = useState("");
-  const [finals, setFinals] = useState<string[]>([]);
-  const [summary, setSummary] = useState<string | null>(null);
-  const [audioUrl, setAudioUrl] = useState<string | null>(null);
-
-  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
-  const micStreamRef = useRef<MediaStream | null>(null);
-  const wsRef = useRef<WebSocket | null>(null);
-  const httpStopRef = useRef<null | (() => Promise<void>)>(null);
-  const sessionIdRef = useRef<string>("");
-  const usingWSRef = useRef<boolean>(false);
-  const mimeRef = useRef<string>("");
-
-  // 시작
-  useEffect(() => {
-    start().catch((e) => {
-      alert("마이크 권한/연결 오류");
-      console.error(e);
-    });
-    return cleanupHard;
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-
-  async function start() {
-    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-    micStreamRef.current = stream;
-
-    const mime = pickMimeType();
-    mimeRef.current = mime;
-
-    // WS 우선
-    try {
-      await new Promise<void>((resolve, reject) => {
-        const codec = mime.includes("ogg")
-          ? "ogg_opus"
-          : mime.includes("webm")
-          ? "webm_opus"
-          : "unknown";
-        const ws = new WebSocket(`${WS_URL}?lang=ko&codec=${codec}`);
-        ws.binaryType = "arraybuffer";
-        wsRef.current = ws;
-        sessionIdRef.current = crypto.randomUUID();
-        ws.onopen = () => {
-          ws.send(
-            JSON.stringify({
-              type: "start",
-              sessionId: sessionIdRef.current,
-              contentType: mime || "audio/webm;codecs=opus",
-            })
-          );
-          const mr = new MediaRecorder(stream, mime ? { mimeType: mime } : undefined);
-          mediaRecorderRef.current = mr;
-          mr.ondataavailable = (e) => {
-            if (e.data && e.data.size > 0 && ws.readyState === WebSocket.OPEN) {
-              ws.send(e.data);
-            }
-          };
-          mr.start(3000);
-          resolve();
-        };
-        ws.onerror = () => reject(new Error("ws-fail"));
-        ws.onmessage = (evt) => {
-          try {
-            const m = JSON.parse(evt.data);
-            if (m.type === "partial") setPartial(m.text);
-            else if (m.type === "final") setFinals((p) => [...p, m.text]);
-            else if (m.type === "summary") {
-              setSummary(m.summary);
-              setAudioUrl(m.audioUrl);
-              onFinish(m);
-            }
-          } catch {}
-        };
-      });
-      usingWSRef.current = true;
-    } catch {
-      // HTTP 폴백
-      sessionIdRef.current = crypto.randomUUID();
-      const mr = new MediaRecorder(stream, mime ? { mimeType: mime } : undefined);
-      mediaRecorderRef.current = mr;
-      mr.ondataavailable = async (e) => {
-        if (!e.data || e.data.size === 0) return;
-        const fd = new FormData();
-        fd.append("audio", e.data, `chunk.${mime.includes("ogg") ? "ogg" : "webm"}`);
-        fd.append("sessionId", sessionIdRef.current);
-        fd.append("lang", "ko");
-        try {
-          const r = await fetch(HTTP_CHUNK_URL, { method: "POST", body: fd });
-          const d = await r.json();
-          if (d.partial) setPartial(d.partial);
-          if (d.final) setFinals((p) => [...p, d.final]);
-        } catch (err) {
-          console.warn("청크 업로드 실패", err);
-        }
-      };
-      mr.start(3000);
-      httpStopRef.current = async () => {
-        const r = await fetch(
-          `${HTTP_FINALIZE_URL}?sessionId=${sessionIdRef.current}`,
-          { method: "POST" }
-        );
-        const fin = await r.json(); // {audioUrl, transcript, summary}
-        setSummary(fin.summary);
-        setAudioUrl(fin.audioUrl);
-        onFinish(fin);
-      };
-      usingWSRef.current = false;
-    }
-  }
-
-  function stopTracks() {
-    try { mediaRecorderRef.current?.stop(); } catch {}
-    try { mediaRecorderRef.current?.stream?.getTracks?.().forEach((t) => t.stop()); } catch {}
-    try { micStreamRef.current?.getTracks?.().forEach((t) => t.stop()); } catch {}
-    mediaRecorderRef.current = null;
-    micStreamRef.current = null;
-  }
-
-  function cleanupSoft() {
-    // WS 종료 신호만
-    try {
-      if (usingWSRef.current && wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
-        wsRef.current.send(JSON.stringify({ type: "stop", sessionId: sessionIdRef.current }));
-        setTimeout(() => {
-          try { if (wsRef.current && wsRef.current.readyState <= 1) wsRef.current.close(); } catch {}
-        }, 1500);
-      }
-    } catch {}
-  }
-
-  function cleanupHard() {
-    cleanupSoft();
-    try { wsRef.current && wsRef.current.close(); } catch {}
-    stopTracks();
-  }
-
-  const handlePauseOrResume = () => {
-    if (!mediaRecorderRef.current) return;
-    if (status === "rec") {
-      // 일시정지: 실제 마이크도 끔
-      try { mediaRecorderRef.current.pause(); } catch {}
-      setStatus("pause");
-      stopTracks();
-    } else {
-      // 재개: 다시 시작
-      start().then(() => setStatus("rec")).catch(() => setStatus("pause"));
-    }
-  };
-
-  const handleStop = async () => {
-    setStatus("processing");
-    cleanupSoft();
-    stopTracks();
-    if (!usingWSRef.current && httpStopRef.current) {
-      await httpStopRef.current();
-    }
-  };
-
-  const handleClose = async () => {
-    await handleStop();
-    if (onFinish) {
-      onFinish({
-        audioUrl: audioUrl || "",
-        transcript: finals.join("\n"),
-        summary: summary || "",
-      });
-    }
-    cleanupHard();
-    onClose();
-  };
-
-  return (
-    <div className="px-6 pt-3">
-      {/* 헤더: 제목 + “녹음 중…” + 버튼(일시정지/정지/닫기) → 모두 왼쪽에 연달아 배치 */}
-      <div className="flex items-center gap-2 mb-3 flex-wrap">
-        <h2 className="text-xl font-bold">실시간 회의 녹음</h2>
-        <span className="text-sm text-blue-600">
-          {status === "rec" ? "녹음 중…" : status === "pause" ? "일시정지" : "처리 중…"}
-        </span>
-
-        {/* 일시정지/재개 PNG 토글 (텍스트 바로 오른쪽에) */}
-        <button
-          onClick={handlePauseOrResume}
-          className="h-9 w-9 rounded-full border flex items-center justify-center"
-          title={status === "pause" ? "재개" : "일시정지"}
-        >
-          <img
-            src={status === "pause" ? "/icons/재개.png" : "/icons/일시정지.png"}
-            alt={status === "pause" ? "재개" : "일시정지"}
-            className="h-6 w-6"
-          />
-        </button>
-
-        {/* 정지 */}
-        <button
-          onClick={handleStop}
-          className="h-9 w-9 rounded-full border flex items-center justify-center"
-          title="정지"
-        >
-          <img src="/icons/정지.png" alt="정지" className="h-6 w-6" />
-        </button>
-
-        {/* 닫기 (텍스트 버튼) */}
-        <button
-          onClick={handleClose}
-          className="h-9 px-3 rounded-md border"
-          title="닫기"
-        >
-          닫기
-        </button>
-      </div>
-
-      {/* 본문 레이아웃 */}
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-        {/* 좌측: 메모/받아쓰기 */}
-        <div className="lg:col-span-1">
-          <div className="rounded-xl border p-4">
-            <div className="flex items-center justify-between mb-2">
-              <h3 className="font-semibold">메모장</h3>
-              <span className="text-sm text-neutral-400">회의 중 메모</span>
-            </div>
-            <textarea
-              placeholder="간단 메모를 입력하세요…"
-              className="w-full h-64 rounded-md border p-3 outline-none focus:ring-2 focus:ring-blue-200"
-            />
-          </div>
-
-          <div className="rounded-xl border p-4 mt-6">
-            <div className="flex items-center gap-2">
-              <div className="w-2 h-2 rounded-full bg-blue-500 animate-pulse" />
-              <h3 className="font-semibold">실시간 받아쓰기</h3>
-            </div>
-            <div className="mt-2 text-sm text-neutral-600 whitespace-pre-wrap min-h-[80px]">
-              {partial}
-            </div>
-            {finals.length > 0 && (
-              <div className="mt-4">
-                <h4 className="font-medium">확정 문장</h4>
-                <ul className="list-disc list-inside text-sm text-neutral-700 mt-1 space-y-1">
-                  {finals.map((t, i) => (
-                    <li key={i}>{t}</li>
-                  ))}
-                </ul>
-              </div>
-            )}
-          </div>
-        </div>
-
-        {/* 우측: 요약/오디오 (오른쪽은 추후 확장 전제) */}
-        <div className="lg:col-span-2">
-          <div className="rounded-xl border p-4">
-            <div className="flex items-center gap-2">
-              <h3 className="font-semibold">실시간 회의 요약</h3>
-              <span className="text-neutral-400 text-sm">자동 생성</span>
-            </div>
-            {!summary ? (
-              <div className="text-neutral-500 text-sm mt-2">
-                요약을 생성 중입니다… (종료를 누르면 최종 요약이 표시됩니다)
-              </div>
-            ) : (
-              <ul className="list-disc list-inside mt-3 space-y-1">
-                {summary.split(/\n+/).map((s, i) => (
-                  <li key={i}>{s}</li>
-                ))}
-              </ul>
-            )}
-            {audioUrl && (
-              <div className="mt-4">
-                <audio controls src={audioUrl} className="w-full" />
-              </div>
-            )}
-          </div>
-
-          <div className="rounded-xl border p-4 mt-6">
-            <div className="text-neutral-500 text-sm">
-              여기에 지도/필터 등 보조 패널을 배치할 수 있어요.
-            </div>
-          </div>
-        </div>
-      </div>
-    </div>
   );
 }
