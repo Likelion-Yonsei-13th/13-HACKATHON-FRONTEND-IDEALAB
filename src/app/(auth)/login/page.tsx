@@ -9,7 +9,7 @@ export default function LoginPage() {
   const sp = useSearchParams();
   const next = sp.get("next") || "/ws/p1";
 
-  const [id, setId] = useState("");
+  const [email, setEmail] = useState("");
   const [pw, setPw] = useState("");
   const [loading, setLoading] = useState(false);
   const [err, setErr] = useState("");
@@ -23,7 +23,7 @@ export default function LoginPage() {
       const r = await fetch("/api/login", {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ id, password: pw }),
+        body: JSON.stringify({ email, password: pw }),
       });
       if (!r.ok) {
         const j = await r.json().catch(() => ({}));
@@ -39,28 +39,38 @@ export default function LoginPage() {
   };
 
   return (
-    <div className="min-h-dvh flex items-center justify-center bg-neutral-50">
-      <div className="w-[360px] rounded-2xl bg-white p-6 shadow">
-        <div className="flex items-center justify-center mb-6">
-          <img src="/logos/IDEAL.png" className="h-7" alt="IDEA" />
-          <img src="/logos/Lab.png" className="h-7 -ml-4 relative z-10" alt="Lab" />
+    <div className="min-h-dvh flex items-center justify-center">
+      <div className="w-[420px] rounded-2xl bg-white p-8 shadow-lg">
+        {/* 로고 영역 */}
+        <div className="flex items-center justify-center mb-8">
+          <img src="/logos/IDEAL.png" className="h-8" alt="IDEA" />
+          <img
+            src="/logos/Lab.png"
+            className="h-8 -ml-5 relative z-10"
+            alt="Lab"
+          />
         </div>
 
-        <form onSubmit={submit} className="space-y-3">
+        {/* 로그인 폼 */}
+        <form onSubmit={submit} className="space-y-4">
           <input
+            type="email"
             className="w-full rounded-md border px-3 py-2 outline-none focus:ring-2 focus:ring-blue-400"
-            placeholder="아이디"
+            placeholder="이메일"
             autoComplete="username"
-            value={id}
-            onChange={(e) => setId(e.target.value)}
+            value={email}
+            onChange={(e) => setEmail(e.target.value)}
+            required
           />
+
           <input
+            type="password"
             className="w-full rounded-md border px-3 py-2 outline-none focus:ring-2 focus:ring-blue-400"
             placeholder="비밀번호"
-            type="password"
             autoComplete="current-password"
             value={pw}
             onChange={(e) => setPw(e.target.value)}
+            required
           />
 
           {err && <p className="text-sm text-red-600">{err}</p>}
@@ -74,8 +84,12 @@ export default function LoginPage() {
           </button>
         </form>
 
-        <div className="mt-3 text-center text-sm text-neutral-600">
-          계정이 없나요? <a href="/signup" className="text-blue-600 hover:underline">회원가입</a>
+        {/* 회원가입 링크 */}
+        <div className="mt-5 text-center text-sm text-neutral-600">
+          계정이 없나요?{" "}
+          <a href="/signup" className="text-blue-600 hover:underline">
+            회원가입
+          </a>
         </div>
       </div>
     </div>
