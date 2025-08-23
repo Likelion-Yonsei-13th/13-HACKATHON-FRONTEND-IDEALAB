@@ -5,26 +5,107 @@ import ReactMarkdown from "react-markdown";
 import MapsGraphs from "@/components/MapsGraphs";
 import GuSelect from "@/components/GuSelect";
 import CategorySelector from "@/components/CategorySelect";
+import PieChart from "@/components/PieChart";
+import LineChart from "@/components/LineChart";
+import BarChart from "@/components/BarChart";
 import Image from "next/image";
 
-export default function RightTab({ backendGu }) {
-  const [currentDate, setCurrentDate] = useState("");
-  const [selectedGu, setSelectedGu] = useState(backendGu || "서대문구");
-
-  useEffect(() => {
-    const today = new Date();
-    const month = today.getMonth() + 1;
-    const date = today.getDate();
-
-    const formattedDate = `${month}/${date}`;
-    setCurrentDate(formattedDate);
-  }, []);
-
-  const [activeButton, setActiveButton] = useState("전체");
-
-  const handleInfoClick = (buttonName) => {
-    setActiveButton(buttonName);
+// 백에서 받는 데이터 대신
+const fetchMockData = (gu) => {
+  console.log(`${gu}의 데이터를 새로 요청합니다...`);
+  if (gu === "강남구") {
+    return {
+      genderData: { female: 70.1, male: 29.9 },
+      timeData: [
+        { time: "00~06시", value: 5 },
+        { time: "06~11시", value: 10 },
+        { time: "11~14시", value: 15 },
+        { time: "14~17시", value: 30 },
+        { time: "17~21시", value: 25 },
+        { time: "21~24시", value: 15 },
+      ],
+      ageData: [
+        { label: "10대", value: 2 },
+        { label: "20대", value: 25 },
+        { label: "30대", value: 40.2 },
+        { label: "40대", value: 20 },
+        { label: "50대", value: 10.8 },
+        { label: "60대 이상", value: 2 },
+      ],
+      dayData: [
+        { label: "월", value: 15 },
+        { label: "화", value: 18 },
+        { label: "수", value: 25.8 },
+        { label: "목", value: 12 },
+        { label: "금", value: 10 },
+        { label: "토", value: 9.2 },
+        { label: "일", value: 10 },
+      ],
+      summary: {
+        gender:
+          "강남구는 여성(70.1%) 고객의 소비가 활발한 지역입니다. 여성을 타겟으로 한 마케팅 전략이 유효할 수 있습니다.",
+        age: "주요 소비층은 30대(40.2%)입니다. 구매력 있는 직장인을 대상으로 한 고급화 전략을 고려해 보세요.",
+        day: "수요일(25.8%)에 매출이 가장 높게 나타납니다. 주중 점심 및 저녁 시간대 프로모션이 효과적일 수 있습니다.",
+        time: "하루 중 14~17시 사이에 매출이 가장 높습니다. 늦은 점심 또는 이른 저녁 시간대 고객 유입을 유도해 보세요.",
+      },
+    };
+  }
+  // 기본 데이터 (서대문구 등)
+  return {
+    genderData: { female: 61.7, male: 38.3 },
+    timeData: [
+      { time: "00~06시", value: 0 },
+      { time: "06~11시", value: 8.3 },
+      { time: "11~14시", value: 19.3 },
+      { time: "14~17시", value: 52 },
+      { time: "17~21시", value: 19.5 },
+      { time: "21~24시", value: 1 },
+    ],
+    ageData: [
+      { label: "10대", value: 1 },
+      { label: "20대", value: 32.6 },
+      { label: "30대", value: 11.7 },
+      { label: "40대", value: 21.3 },
+      { label: "50대", value: 30.3 },
+      { label: "60대 이상", value: 3.1 },
+    ],
+    dayData: [
+      { label: "월", value: 10.9 },
+      { label: "화", value: 10.6 },
+      { label: "수", value: 14.1 },
+      { label: "목", value: 9.8 },
+      { label: "금", value: 30.4 },
+      { label: "토", value: 16.6 },
+      { label: "일", value: 7.6 },
+    ],
+    summary: {
+      gender:
+        "선택상권은 여성(61.7%) 고객이 많은 상권입니다. 여성 고객의 방문에 도움이되는 요소에 보다 많은 투자를 고려하세요.",
+      age: "선택상권의 외식업은 20대(32.6%)가 가장 활발한 소비를 보입니다. 젊은 층이 관심을 가질 만한 트렌디한 아이템 도입을 고려해 보세요.",
+      day: "서대문구는 금요일에 가장 매출이 높습니다. 주말을 앞둔 약속이나 외식 수요가 높은 상권입니다.",
+      time: "14~17시 매출이 가장 높습니다. 오후와 저녁시간대가 활발한 상권입니다.",
+    },
   };
+};
+
+export default function RightTab({ backendGu }) {
+  const [selectedGu, setSelectedGu] = useState(backendGu || "서대문구");
+  const [genderData, setGenderData] = useState(null);
+  const [timeData, setTimeData] = useState(null);
+  const [ageData, setAgeData] = useState(null);
+  const [dayData, setDayData] = useState(null);
+  const [ageHighlight, setAgeHighlight] = useState(null);
+  const [dayHighlight, setDayHighlight] = useState(null);
+  const [maxAgeItem, setMaxAgeItem] = useState(null);
+  const [maxDayItem, setMaxDayItem] = useState(null);
+  const [maxTimeItem, setMaxTimeItem] = useState(null);
+  const [maxGenderItem, setMaxGenderItem] = useState(null);
+  const [summary, setSummary] = useState({
+    gender: "",
+    age: "",
+    day: "",
+    time: "",
+  });
 
   const [activeLocation, setActiveLocation] = useState("");
   const [fetchedData, setFetchedData] = useState(null); //api로 받아온 데이터 저장
@@ -42,18 +123,24 @@ export default function RightTab({ backendGu }) {
   const dummyData = {
     신촌: {
       title: "신촌",
-      content:
-        "### 홍대: 문화, 트렌드, 유동인구의 중심\n\n- **핵심 키워드**: 문화 예술, 젊음, 빠른 트렌드\n- **주요 고객**: 20~30대, 외국인 관광객\n- **창업 시 장점**: 강력한 SNS 파급력, 다양한 유동인구\n- **유의점**: 높은 임대료, 치열한 경쟁, 유행 주기 짧음",
+      properties: {
+        SIG_KOR_NM: "서대문구", // 'SIG.json' 파일의 'SIG_KOR_NM'과 일치하도록 수정
+        district_id: "seodaemun-gu",
+      },
     },
     성수: {
       title: "성수",
-      content:
-        "### 신촌: 학생과 젊은 층의 활기찬 상권\n\n- **핵심 키워드**: 대학가, 활기, 복합 문화\n- **주요 고객**: 대학생, 10~20대\n- **창업 시 장점**: 꾸준한 수요, 새로운 아이디어 수용적\n- **유의점**: 빠른 유행 변화, 복잡한 골목 상권",
+      properties: {
+        SIG_KOR_NM: "성동구", // 'SIG.json' 파일의 'SIG_KOR_NM'과 일치하도록 수정
+        district_id: "seogdong-gu",
+      },
     },
     강남: {
       title: "강남",
-      content:
-        "### 합정: 개성 있고 트렌디한 감성 상권\n\n- **핵심 키워드**: 독립적, 감성적, 예술적\n- **주요 고객**: 20~30대, 직장인, 커플\n- **창업 시 장점**: 개성 있는 분위기, 높은 SNS 노출\n- **유의점**: 홍대/신촌 대비 낮은 유동인구, 높은 임대료",
+      properties: {
+        SIG_KOR_NM: "강남구", // 'SIG.json' 파일의 'SIG_KOR_NM'과 일치하도록 수정
+        district_id: "gangnam-gu",
+      },
     },
   };
 
@@ -101,40 +188,90 @@ export default function RightTab({ backendGu }) {
     return () => clearTimeout(timer);
   }, []);
 
+  // ai 추천 지역 버튼
   const handleButtonClick = (buttonName) => {
     setActiveAiButton(buttonName);
     setActiveLocation(buttonName);
+    const newGu = dummyData[buttonName].properties.SIG_KOR_NM;
+    setSelectedGu(newGu);
   };
+
+  // 그래프 그리기
+  useEffect(() => {
+    // 실제 API 호출 로직
+    // const fetchData = async () => {
+    //   const response = await fetch(`/api/dashboard-data?gu=${selectedGu}`);
+    //   const data = await response.json();
+    //   setGenderData(data.genderSales);
+    //   setTimeData(data.timeSales);
+    //   setAgeData(data.ageSales);
+    //   setDayData(data.daySales);
+    // };
+    // fetchData();
+
+    // 가짜 데이터로 테스트
+    const data = fetchMockData(selectedGu);
+
+    // 막대그래프 최대값 구하기
+    if (data.ageData && data.ageData.length > 0) {
+      const maxAgeItem = data.ageData.reduce((max, current) =>
+        current.value > max.value ? current : max
+      );
+      setAgeHighlight(maxAgeItem.label);
+    }
+
+    if (data.dayData && data.dayData.length > 0) {
+      const maxDayItem = data.dayData.reduce((max, current) =>
+        current.value > max.value ? current : max
+      );
+      setDayHighlight(maxDayItem.label);
+    }
+
+    if (data.ageData?.length > 0) {
+      const maxItem = data.ageData.reduce((max, current) =>
+        current.value > max.value ? current : max
+      );
+      setMaxAgeItem(maxItem);
+    }
+    if (data.dayData?.length > 0) {
+      const maxItem = data.dayData.reduce((max, current) =>
+        current.value > max.value ? current : max
+      );
+      setMaxDayItem(maxItem);
+    }
+    if (data.timeData?.length > 0) {
+      const maxItem = data.timeData.reduce((max, current) =>
+        current.value > max.value ? current : max
+      );
+      setMaxTimeItem(maxItem);
+    }
+    if (data.genderData) {
+      const genderLabel =
+        data.genderData.female > data.genderData.male ? "여성" : "남성";
+      const genderValue = Math.max(
+        data.genderData.female,
+        data.genderData.male
+      );
+      setMaxGenderItem({ label: genderLabel, value: genderValue });
+    }
+
+    if (data.summary) {
+      setSummary(data.summary);
+    }
+
+    setGenderData(data.genderData);
+    setTimeData(data.timeData);
+    setAgeData(data.ageData);
+    setDayData(data.dayData);
+  }, [selectedGu]);
+
+  if (!genderData || !timeData || !ageData || !dayData) {
+    return <div>데이터를 불러오는 중입니다...</div>;
+  }
 
   return (
     <main className="flex flex-col h-screen gap-2">
       {/* 회의록 */}
-      {/* <div className="pl-5 flex-1 overflow-y-auto">
-        <h1 className="pt-5 font-semibold text-[30px]">{currentDate} 회의</h1>
-        <h3 className="pt-5 text-[20px]">오늘 회의할 내용</h3>
-        <div className="pl-2 pt-1">
-          <ol className="list-decimal list-outside flex flex-col gap-2 px-4">
-            <li className="bg-[#FFFCBA]">무드 레퍼런스 찾기</li>
-            <li className="bg-[#FFFCBA]">위치별로 데이터 모으기</li>
-            <li className="bg-[#FFFCBA]">
-              업종 - 현재 있는 업종 중 참고할 만한 내용 정리
-            </li>
-          </ol>
-
-          <p className="pt-7">어떤 무드로 할까?</p>
-          <ul className="list-disc list-inside">
-            <li>이상한 나라의 앨리스</li>
-            <li>나무, 숲</li>
-          </ul>
-          <p className="pt-7">어떤 위치가 좋을까?</p>
-          <ul className="list-disc list-inside font-bold underline text-underline-offset: auto">
-            <li>홍대</li>
-            <li>신촌</li>
-            <li>합정</li>
-          </ul>
-        </div>
-      </div>
-      <div className="h-full w-px bg-black"></div> */}
 
       {/* 상단 버튼 */}
       <div>
@@ -174,52 +311,68 @@ export default function RightTab({ backendGu }) {
             <CategorySelector />
           </div>
         </div>
-
-        {/* <div className="flex flex-row gap-2 pt-3">
-          <button
-            onClick={() => handleInfoClick("전체")}
-            className={`flex h-8 py-[1px] px-4 justify-center items-center gap-[-8px] rounded-[32px] border ${
-              activeButton === "전체"
-                ? "bg-[#0472DE] text-[#ffffff]"
-                : "bg-[#ffffff] text-[#0472DE]"
-            }`}
-          >
-            전체
-          </button>
-          <button
-            onClick={() => handleInfoClick("요약")}
-            className={`flex h-8 py-[1px] px-4 justify-center items-center gap-[-8px] rounded-[32px] border ${
-              activeButton === "요약"
-                ? "bg-[#0472DE] text-[#ffffff]"
-                : "bg-[#ffffff] text-[#0472DE]"
-            }`}
-          >
-            요약
-          </button>
-          <button
-            onClick={() => handleInfoClick("구체적")}
-            className={`flex h-8 py-[1px] px-4 justify-center items-center gap-[-8px] rounded-[32px] border ${
-              activeButton === "구체적"
-                ? "bg-[#0472DE] text-[#ffffff]"
-                : "bg-[#ffffff] text-[#0472DE]"
-            }`}
-          >
-            구체적
-          </button>
-        </div> */}
       </div>
-      {/* 지도 및 그래프 */}
+      {/* 지도 */}
       <div className="flex px-12 py-7 relative z-10">
         <MapsGraphs selectedGu={selectedGu} />
       </div>
       {/* ai 정보 제공 */}
-      <div>
+      {/* <div>
         {fetchedData && (
-          <div className="pt-5 prose pr-2">
-            {/* <h2>{fetchedData.title}</h2> */}
-            <ReactMarkdown>{fetchedData.content}</ReactMarkdown>
+          <div className="pt-5 prose pr-2"> */}
+      {/* <h2>{fetchedData.title}</h2> */}
+      {/* <ReactMarkdown>{fetchedData.content}</ReactMarkdown>
           </div>
         )}
+      </div> */}
+      {/* 그래프 */}
+      <div className="p-8">
+        <div className="flex flex-col gap-8">
+          <div className="p-4 border rounded-lg">
+            <h2 className="text-xl font-bold text-blue-600 mb-2">
+              {maxDayItem?.label}({maxDayItem?.value}%) 매출이 가장 높아요.
+            </h2>
+            <p className="text-sm bg-blue-50 p-3 rounded-md mb-4">
+              {summary.day}
+            </p>
+            <BarChart
+              data={dayData}
+              highlightLabel={dayHighlight}
+              title="요일별 매출 현황"
+            />
+          </div>
+          <div className="p-4 border rounded-lg">
+            <h2 className="text-xl font-bold text-blue-600 mb-2">
+              {maxGenderItem?.label}({maxGenderItem?.value}%) 매출이 높아요.
+            </h2>
+            <p className="text-sm bg-blue-50 p-3 rounded-md mb-4">
+              {summary.gender}
+            </p>
+            <PieChart data={genderData} />
+          </div>
+          <div className="p-4 border rounded-lg">
+            <h2 className="text-xl font-bold text-blue-600 mb-2">
+              {maxTimeItem?.label} 매출이 가장 높아요.
+            </h2>
+            <p className="text-sm bg-blue-50 p-3 rounded-md mb-4">
+              {summary.time}
+            </p>
+            <LineChart data={timeData} />
+          </div>
+          <div className="p-4 border rounded-lg">
+            <h2 className="text-xl font-bold text-blue-600 mb-2">
+              {maxAgeItem?.label}({maxAgeItem?.value}%) 매출이 높아요.
+            </h2>
+            <p className="text-sm bg-blue-50 p-3 rounded-md mb-4">
+              {summary.age}
+            </p>
+            <BarChart
+              data={ageData}
+              highlightLabel={ageHighlight}
+              title="연령대별 매출 현황"
+            />
+          </div>
+        </div>
       </div>
     </main>
   );
