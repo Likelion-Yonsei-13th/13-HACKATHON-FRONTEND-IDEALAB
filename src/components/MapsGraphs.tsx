@@ -83,9 +83,14 @@ export default function MapsGraphs({ selectedGu }) {
     const recieveGu = geojsonData.features[0].properties.SIG_KOR_NM;
 
     //geoJSON에서 해당 구 정보 찾기
-    const matchingFeature = sigData.features.find(
-      (sigFeature: any) => sigFeature.properties.SIG_KOR_NM === recieveGu
-    );
+    const matchingFeature = sigData.features.find((feature) => {
+      if (selectedGu === "중구") {
+        // 중구가 여러 도시에 있어서,, 서울 중구로 보이게
+        return feature.properties.SIG_CD === "11140";
+      } else {
+        return feature.properties.SIG_KOR_NM === selectedGu;
+      }
+    });
     if (!matchingFeature) {
       console.error(`${selectedGu}에 해당하는 지역 데이터를 찾을 수 없습니다.`);
       return;

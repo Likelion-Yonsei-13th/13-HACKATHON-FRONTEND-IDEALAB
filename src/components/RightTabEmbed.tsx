@@ -15,166 +15,112 @@ type Props = {
   className?: string; // 부모에서 높이/여백 제어용
 };
 
-// ───────────────────────────────────────────────────────────────
-// 가짜 데이터(백엔드 연동 전 임시)
-const fetchMockData = (gu: string) => {
-  if (gu === "강남구") {
-    return {
-      genderData: { female: 70.1, male: 29.9 },
-      timeData: [
-        { time: "00~06시", value: 5 },
-        { time: "06~11시", value: 10 },
-        { time: "11~14시", value: 15 },
-        { time: "14~17시", value: 30 },
-        { time: "17~21시", value: 25 },
-        { time: "21~24시", value: 15 },
-      ],
-      ageData: [
-        { label: "10대", value: 2 },
-        { label: "20대", value: 25 },
-        { label: "30대", value: 40.2 },
-        { label: "40대", value: 20 },
-        { label: "50대", value: 10.8 },
-        { label: "60대 이상", value: 2 },
-      ],
-      dayData: [
-        { label: "월", value: 15 },
-        { label: "화", value: 18 },
-        { label: "수", value: 25.8 },
-        { label: "목", value: 12 },
-        { label: "금", value: 10 },
-        { label: "토", value: 9.2 },
-        { label: "일", value: 10 },
-      ],
-      summary: {
-        gender:
-          "강남구는 여성(70.1%) 고객의 소비가 활발한 지역입니다. 여성을 타겟으로 한 마케팅 전략이 유효할 수 있습니다.",
-        age: "주요 소비층은 30대(40.2%)입니다. 구매력 있는 직장인을 대상으로 한 고급화 전략을 고려해 보세요.",
-        day: "수요일(25.8%)에 매출이 가장 높게 나타납니다. 주중 점심 및 저녁 시간대 프로모션이 효과적일 수 있습니다.",
-        time: "하루 중 14~17시 사이에 매출이 가장 높습니다. 늦은 점심 또는 이른 저녁 시간대 고객 유입을 유도해 보세요.",
-      },
-    };
-  }
-  return {
-    genderData: { female: 61.7, male: 38.3 },
-    timeData: [
-      { time: "00~06시", value: 0 },
-      { time: "06~11시", value: 8.3 },
-      { time: "11~14시", value: 19.3 },
-      { time: "14~17시", value: 52 },
-      { time: "17~21시", value: 19.5 },
-      { time: "21~24시", value: 1 },
-    ],
-    ageData: [
-      { label: "10대", value: 1 },
-      { label: "20대", value: 32.6 },
-      { label: "30대", value: 11.7 },
-      { label: "40대", value: 21.3 },
-      { label: "50대", value: 30.3 },
-      { label: "60대 이상", value: 3.1 },
-    ],
-    dayData: [
-      { label: "월", value: 10.9 },
-      { label: "화", value: 10.6 },
-      { label: "수", value: 14.1 },
-      { label: "목", value: 9.8 },
-      { label: "금", value: 30.4 },
-      { label: "토", value: 16.6 },
-      { label: "일", value: 7.6 },
-    ],
-    summary: {
-      gender:
-        "선택상권은 여성(61.7%) 고객이 많은 상권입니다. 여성 고객의 방문에 도움이되는 요소에 보다 많은 투자를 고려하세요.",
-      age: "선택상권의 외식업은 20대(32.6%)가 가장 활발한 소비를 보입니다. 젊은 층이 관심을 가질 만한 트렌디한 아이템 도입을 고려해 보세요.",
-      day: "서대문구는 금요일에 가장 매출이 높습니다. 주말을 앞둔 약속이나 외식 수요가 높은 상권입니다.",
-      time: "14~17시 매출이 가장 높습니다. 오후와 저녁시간대가 활발한 상권입니다.",
-    },
-  };
-};
-// ───────────────────────────────────────────────────────────────
-
 export default function RightTabEmbed({ backendGu, className }: Props) {
   const [selectedGu, setSelectedGu] = useState<string>(backendGu || "서대문구");
+  const [selections, setSelections] = useState<Record<string, string | null>>(
+    {}
+  );
+
+  const [isLoading, setIsLoading] = useState<boolean>(true);
+  const [error, setError] = useState<string | null>(null);
 
   const [genderData, setGenderData] = useState<any>(null);
   const [timeData, setTimeData] = useState<any>(null);
   const [ageData, setAgeData] = useState<any>(null);
   const [dayData, setDayData] = useState<any>(null);
+  const [summary, setSummary] = useState<any>({});
+  const [aiGeneratedButton, setAiGeneratedButton] = useState<string[]>([]);
 
-  const [summary, setSummary] = useState({ gender: "", age: "", day: "", time: "" });
-  const [ageHighlight, setAgeHighlight] = useState<string | null>(null);
-  const [dayHighlight, setDayHighlight] = useState<string | null>(null);
   const [maxAgeItem, setMaxAgeItem] = useState<any>(null);
   const [maxDayItem, setMaxDayItem] = useState<any>(null);
   const [maxTimeItem, setMaxTimeItem] = useState<any>(null);
   const [maxGenderItem, setMaxGenderItem] = useState<any>(null);
 
-  const [activeLocation, setActiveLocation] = useState("");
-  const [aiGeneratedButton, setAiGeneratedButton] = useState<string[]>([]);
-  const [activeAiButton, setActiveAiButton] = useState<string | null>(null);
-
   useEffect(() => {
     if (backendGu && backendGu !== selectedGu) setSelectedGu(backendGu);
   }, [backendGu]); // eslint-disable-line
 
-  // 추천 지역 더미
-  const dummyData: Record<string, any> = {
-    신촌: { title: "신촌", properties: { SIG_KOR_NM: "서대문구", district_id: "seodaemun-gu" } },
-    성수: { title: "성수", properties: { SIG_KOR_NM: "성동구", district_id: "seongdong-gu" } },
-    강남: { title: "강남", properties: { SIG_KOR_NM: "강남구", district_id: "gangnam-gu" } },
-  };
-
-  useEffect(() => {
-    const names = Object.keys(dummyData);
-    const t = setTimeout(() => {
-      setAiGeneratedButton(names);
-      setActiveAiButton(names[0]);
-      setActiveLocation(names[0]);
-      setSelectedGu(dummyData[names[0]].properties.SIG_KOR_NM);
-    }, 1200);
-    return () => clearTimeout(t);
-  }, []); // mount
-
-  // 버튼 클릭 시 지역 변경
-  const handleButtonClick = (name: string) => {
-    setActiveAiButton(name);
-    setActiveLocation(name);
-    setSelectedGu(dummyData[name].properties.SIG_KOR_NM);
-  };
-
   // 선택 구 변경 시 차트 데이터 갱신
   useEffect(() => {
-    const data = fetchMockData(selectedGu);
+    const loadDashboardData = async () => {
+      setIsLoading(true); // 데이터 요청 시작 -> 로딩 상태 활성화
+      setError(null);
 
-    if (data.ageData?.length) {
-      const max = data.ageData.reduce((m: any, c: any) => (c.value > m.value ? c : m));
-      setAgeHighlight(max.label);
-      setMaxAgeItem(max);
-    }
-    if (data.dayData?.length) {
-      const max = data.dayData.reduce((m: any, c: any) => (c.value > m.value ? c : m));
-      setDayHighlight(max.label);
-      setMaxDayItem(max);
-    }
-    if (data.timeData?.length) {
-      const max = data.timeData.reduce((m: any, c: any) => (c.value > m.value ? c : m));
-      setMaxTimeItem(max);
-    }
-    if (data.genderData) {
-      const label = data.genderData.female > data.genderData.male ? "여성" : "남성";
-      const value = Math.max(data.genderData.female, data.genderData.male);
-      setMaxGenderItem({ label, value });
-    }
-    if (data.summary) setSummary(data.summary);
+      try {
+        // 업종 선택값 가져오기 (첫 번째 선택된 업종 사용, 없으면 '음식점업' 기본값)
+        const mainCategory =
+          Object.values(selections).filter((v) => v)[0] || "음식점업";
 
-    setGenderData(data.genderData);
-    setTimeData(data.timeData);
-    setAgeData(data.ageData);
-    setDayData(data.dayData);
-  }, [selectedGu]);
+        // API URL 동적으로 생성
+        const apiUrl = `/api/dashboard/summary?gu=${selectedGu}&category=${mainCategory}`;
+        console.log(`API 요청: ${apiUrl}`);
 
-  if (!genderData || !timeData || !ageData || !dayData) {
+        // fetch 함수로 API 호출
+        const response = await fetch(apiUrl);
+
+        // 응답이 실패한 경우 (예: 404, 500 에러)
+        if (!response.ok) {
+          throw new Error(`HTTP error! status: ${response.status}`);
+        }
+
+        // 응답 본문을 JSON으로 파싱
+        const data = await response.json();
+
+        // 받아온 실제 데이터로 모든 state 업데이트
+        setGenderData(data.charts.genderSales);
+        setTimeData(data.charts.timeSales);
+        setAgeData(data.charts.ageSales);
+        setDayData(data.charts.daySales);
+
+        setSummary(data.summaries);
+        setAiGeneratedButton(data.aiRecommendations);
+
+        // 최댓값 계산 로직
+        if (data.charts.ageSales?.length > 0) {
+          const maxItem = data.charts.ageSales.reduce((m: any, c: any) =>
+            c.value > m.value ? (m = c) : m
+          );
+          setMaxAgeItem(maxItem);
+        }
+        if (data.charts.daySales?.length > 0) {
+          const maxItem = data.charts.daySales.reduce((m: any, c: any) =>
+            c.value > m.value ? (m = c) : m
+          );
+          setMaxDayItem(maxItem);
+        }
+        if (data.charts.timeSales?.length > 0) {
+          const maxItem = data.charts.timeSales.reduce((m: any, c: any) =>
+            c.value > m.value ? (m = c) : m
+          );
+          setMaxTimeItem(maxItem);
+        }
+        if (data.summaries.gender) {
+          setMaxGenderItem({
+            label: data.summaries.gender.highlightLabel,
+            value: data.summaries.gender.highlightValue,
+          });
+        }
+      } catch (err: any) {
+        // 에러 발생 시 에러 메시지 저장
+        setError(err.message);
+        console.error("API 호출 중 에러 발생:", err);
+      } finally {
+        // 성공하든 실패하든 항상 마지막에 로딩 상태 해제
+        setIsLoading(false);
+      }
+    };
+
+    loadDashboardData(); // 함수 실행
+  }, [selectedGu, selections]); // '구' 또는 '업종'이 바뀔 때마다 재실행
+
+  if (isLoading) {
     return <div className={className}>데이터를 불러오는 중입니다...</div>;
+  }
+  if (error) {
+    return <div className={className}>에러가 발생했습니다: {error}</div>;
+  }
+  if (!genderData || !timeData || !ageData || !dayData) {
+    return <div className={className}>표시할 데이터가 없습니다.</div>;
   }
 
   // ───────────────────────────────────────────────────────────────
@@ -182,7 +128,7 @@ export default function RightTabEmbed({ backendGu, className }: Props) {
   return (
     <div className={`flex flex-col h-full ${className || ""}`}>
       {/* 헤더(고정) */}
-      <div className="sticky top-0 z-10 bg-white/90 backdrop-blur px-8 pt-0 pb-3 border-b">
+      <div className="sticky top-0 z-10 bg-white/90 backdrop-blur px-6 pt-0 pb-3 border-b">
         <div className="flex flex-row items-center gap-2">
           <p className="text-[14px] text-[#A5A6B9]">AI 정보 제공</p>
           <Image src="/aiInfo.svg" height={20} width={20} alt="안내" />
@@ -191,21 +137,19 @@ export default function RightTabEmbed({ backendGu, className }: Props) {
 
         {/* 추천 지역 버튼 */}
         <div className="flex flex-row gap-2 pt-3">
-          {aiGeneratedButton.length > 0 ? (
-            aiGeneratedButton.map((name) => (
-              <button
-                key={name}
-                onClick={() => handleButtonClick(name)}
-                className={`px-3 py-2 h-10 rounded-lg border ${
-                  activeAiButton === name ? "bg-[#0472DE] text-white" : "bg-white text-[#0472DE]"
-                }`}
-              >
-                {name}
-              </button>
-            ))
-          ) : (
-            <p>AI가 버튼을 생성하는 중입니다...</p>
-          )}
+          {aiGeneratedButton.map((button) => (
+            <button
+              key={button.name}
+              onClick={() => setSelectedGu(button.gu)}
+              className={`px-3 py-2 h-10 rounded-lg border ${
+                selectedGu === button.gu
+                  ? "bg-[#0472DE] text-white"
+                  : "bg-white text-[#0472DE]"
+              }`}
+            >
+              {button.name}
+            </button>
+          ))}
         </div>
 
         {/* 지역/업종 선택 */}
@@ -214,7 +158,10 @@ export default function RightTabEmbed({ backendGu, className }: Props) {
             <GuSelect selectedGu={selectedGu} onGuChange={setSelectedGu} />
           </div>
           <div className="flex items-start justify-center">
-            <CategorySelector />
+            <CategorySelector
+              selections={selections}
+              onSelectionChange={setSelections}
+            />
           </div>
         </div>
       </div>
@@ -231,34 +178,50 @@ export default function RightTabEmbed({ backendGu, className }: Props) {
           <div className="flex flex-col gap-8">
             <div className="p-4 border rounded-lg">
               <h2 className="text-xl font-bold text-blue-600 mb-2">
-                {maxDayItem?.label}({maxDayItem?.value}%) 매출이 가장 높아요.
+                {summary.day?.heading}
               </h2>
-              <p className="text-sm bg-blue-50 p-3 rounded-md mb-4">{summary.day}</p>
-              <BarChart data={dayData} highlightLabel={dayHighlight} title="요일별 매출 현황" />
+              <p className="text-sm bg-blue-50 p-3 rounded-md mb-4">
+                {summary.day?.paragraph}
+              </p>
+              <BarChart
+                data={dayData}
+                highlightLabel={maxDayItem?.label}
+                title="요일별 매출 현황"
+              />
             </div>
 
             <div className="p-4 border rounded-lg">
               <h2 className="text-xl font-bold text-blue-600 mb-2">
-                {maxGenderItem?.label}({maxGenderItem?.value}%) 매출이 높아요.
+                {summary.gender?.heading}
               </h2>
-              <p className="text-sm bg-blue-50 p-3 rounded-md mb-4">{summary.gender}</p>
+              <p className="text-sm bg-blue-50 p-3 rounded-md mb-4">
+                {summary.gender?.paragraph}
+              </p>
               <PieChart data={genderData} />
             </div>
 
             <div className="p-4 border rounded-lg">
               <h2 className="text-xl font-bold text-blue-600 mb-2">
-                {maxTimeItem?.label} 매출이 가장 높아요.
+                {summary.time?.heading}
               </h2>
-              <p className="text-sm bg-blue-50 p-3 rounded-md mb-4">{summary.time}</p>
+              <p className="text-sm bg-blue-50 p-3 rounded-md mb-4">
+                {summary.time?.paragraph}
+              </p>
               <LineChart data={timeData} />
             </div>
 
             <div className="p-4 border rounded-lg">
               <h2 className="text-xl font-bold text-blue-600 mb-2">
-                {maxAgeItem?.label}({maxAgeItem?.value}%) 매출이 높아요.
+                {summary.age?.heading}
               </h2>
-              <p className="text-sm bg-blue-50 p-3 rounded-md mb-4">{summary.age}</p>
-              <BarChart data={ageData} highlightLabel={ageHighlight} title="연령대별 매출 현황" />
+              <p className="text-sm bg-blue-50 p-3 rounded-md mb-4">
+                {summary.age?.paragraph}
+              </p>
+              <BarChart
+                data={ageData}
+                highlightLabel={maxAgeItem?.label}
+                title="연령대별 매출 현황"
+              />
             </div>
           </div>
         </div>
