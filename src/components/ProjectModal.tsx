@@ -1,6 +1,8 @@
+// File: src/components/ProjectModal.tsx
 "use client";
 
 import { useEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 
 export type NewProject = {
   title: string;
@@ -38,7 +40,7 @@ export default function ProjectModal({
   onCreate,
 }: {
   open: boolean;
-  kind: CreateKind;                 // ★ 어디서 열렸는지
+  kind: CreateKind;
   onClose: () => void;
   onCreate: (p: NewProject) => void;
 }) {
@@ -46,97 +48,138 @@ export default function ProjectModal({
   const [color, setColor] = useState("#3b82f6");
   const inputRef = useRef<HTMLInputElement>(null);
 
+  // 포커스, ESC 닫기, 페이지 스크롤 잠금
   useEffect(() => {
     if (!open) return;
+
     inputRef.current?.focus();
-    const onKey = (e: KeyboardEvent) => e.key === "Escape" && onClose();
+
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") onClose();
+    };
     window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
+
+    const prevHtmlOverflow = document.documentElement.style.overflow;
+    const prevBodyOverflow = document.body.style.overflow;
+    document.documentElement.style.overflow = "hidden";
+    document.body.style.overflow = "hidden";
+
+    return () => {
+      window.removeEventListener("keydown", onKey);
+      document.documentElement.style.overflow = prevHtmlOverflow;
+      document.body.style.overflow = prevBodyOverflow;
+    };
   }, [open, onClose]);
 
   const COLORS = [
-    "#3b82f6", "#ef4444", "#10b981", "#f59e0b",
-    "#8b5cf6", "#06b6d4", "#f472b6", "#22c55e",
+    "#3b82f6",
+    "#ef4444",
+    "#10b981",
+    "#f59e0b",
+    "#8b5cf6",
+    "#06b6d4",
+    "#f472b6",
+    "#22c55e",
   ];
 
   if (!open) return null;
 
   const handleCreate = () => {
     const trimmed = title.trim();
-    if (!trimmed) return inputRef.current?.focus();
+    if (!trimmed) {
+      inputRef.current?.focus();
+      return;
+    }
     onCreate({
       title: trimmed,
       color,
-      icon: kind === "file" ? "file" : undefined, // 파일일 때만 아이콘 지정
+      icon: kind === "file" ? "file" : undefined,
     });
-    onClose();
+    // 입력값 초기화 후 닫기
     setTitle("");
+    onClose();
   };
 
   const T = TEXT[kind];
 
-  return (
+  // ✅ body 포털 + 최상위 z-index로 툴바/헤더 위에도 항상 덮이게
+  return createPortal(
     <div
-      className="fixed inset-0 z-[100] flex items-center justify-center bg-black/40 p-4"
+      className="fixed inset-0 z-[1000]"
       role="dialog"
       aria-modal="true"
-      onClick={onClose}
+      aria-labelledby="project-modal-title"
     >
+      {/* 오버레이 */}
       <div
-        className="w-full max-w-md rounded-xl bg-white p-6 shadow-2xl"
-        onClick={(e) => e.stopPropagation()}
-      >
-        <h2 className="text-lg font-semibold mb-4">{T.modalTitle}</h2>
+        className="absolute inset-0 bg-black/40 backdrop-blur-[1px]"
+        onClick={onClose}
+      />
 
-        <label className="block text-sm mb-1">{T.nameLabel}</label>
-        <input
-          ref={inputRef}
-          value={title}
-          onChange={(e) => setTitle(e.target.value)}
-          placeholder={T.placeholder}
-          className="w-full rounded-md border px-3 py-2 mb-4 focus:outline-none focus:ring focus:ring-blue-100"
-        />
+      {/* 모달 래퍼 (클릭 전파 차단) */}
+      <div className="absolute inset-0 flex items-center justify-center p-4 pointer-events-none">
+        <div
+          className="pointer-events-auto w-[520px] max-w-[92vw] rounded-xl bg-white p-6 shadow-2xl border border-neutral-200"
+          onClick={(e) => e.stopPropagation()}
+        >
+          <h2 id="project-modal-title" className="text-xl font-semibold mb-4">
+            {T.modalTitle}
+          </h2>
 
-        <label className="block text-sm mb-1">색상</label>
-        <div className="mb-4 flex items-center gap-3">
+          <label className="block text-sm mb-1">{T.nameLabel}</label>
           <input
-            type="color"
-            value={color}
-            onChange={(e) => setColor(e.target.value)}
-            className="h-9 w-12 cursor-pointer rounded border"
-            aria-label="color-picker"
+            ref={inputRef}
+            value={title}
+            onChange={(e) => setTitle(e.target.value)}
+            placeholder={T.placeholder}
+            className="w-full rounded-md border border-neutral-300 px-3 py-2 mb-4 outline-none focus:ring-2 focus:ring-blue-200"
           />
-          <div className="flex flex-wrap gap-2">
-            {COLORS.map((c) => (
-              <button
-                key={c}
-                type="button"
-                onClick={() => setColor(c)}
-                className="h-7 w-7 rounded-sm ring-1 ring-black/10"
-                style={{ backgroundColor: c, outline: color === c ? "2px solid black" : "none" }}
-                aria-label={`color-${c}`}
-              />
-            ))}
+
+          <label className="block text-sm mb-1">색상</label>
+          <div className="mb-4 flex items-center gap-3">
+            <input
+              type="color"
+              value={color}
+              onChange={(e) => setColor(e.target.value)}
+              className="h-9 w-12 cursor-pointer rounded border"
+              aria-label="color-picker"
+            />
+            <div className="flex flex-wrap gap-2">
+              {COLORS.map((c) => (
+                <button
+                  key={c}
+                  type="button"
+                  onClick={() => setColor(c)}
+                  className={`h-7 w-7 rounded-sm ring-1 ring-black/10 ${
+                    color === c ? "outline outline-2 outline-black" : ""
+                  }`}
+                  style={{ backgroundColor: c }}
+                  aria-label={`color-${c}`}
+                  title={c}
+                />
+              ))}
+            </div>
+          </div>
+
+          <div className="flex justify-end gap-2">
+            <button
+              type="button"
+              onClick={onClose}
+              className="rounded-md px-4 py-2 border border-neutral-200 hover:bg-neutral-50"
+            >
+              취소
+            </button>
+            <button
+              type="button"
+              onClick={handleCreate}
+              className="rounded-md px-4 py-2 bg-blue-600 text-white hover:bg-blue-700"
+            >
+              {T.createLabel}
+            </button>
           </div>
         </div>
-
-        <div className="flex justify-end gap-2">
-          <button
-            type="button"
-            onClick={onClose}
-            className="rounded-md bg-neutral-100 px-4 py-2 hover:bg-neutral-200"
-          >
-            취소
-          </button>
-          <button
-            type="button"
-            onClick={handleCreate}
-            className="rounded-md bg-blue-600 px-4 py-2 text-white hover:bg-blue-700"
-          >
-            {T.createLabel}
-          </button>
-        </div>
       </div>
-    </div>
+    </div>,
+    document.body
   );
 }
