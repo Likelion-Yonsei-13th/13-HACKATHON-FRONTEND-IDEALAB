@@ -3,6 +3,8 @@
 
 import { useEffect, useRef, useState } from "react";
 import dynamic from "next/dynamic";
+
+// 우측 보조패널: RIGHT 탭 임베드
 const RightTabEmbed = dynamic(() => import("@/components/RightTabEmbed"), { ssr: false });
 
 export type RecorderResult = {
@@ -320,50 +322,75 @@ export default function RecorderPanel({
         </button>
       </div>
 
-      {/* 본문 레이아웃: 좌측 메모/받아쓰기, 우측 RIGHT 탭만 */}
+      {/* 본문: 좌측(메모/받아쓰기), 우측(RightTab) */}
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-        {/* 좌측 */}
-        <div className="lg:col-span-1">
-          {/* 메모장 (보더 제거) */}
-          <div className="p-1">
-            <div className="flex items-center justify-between mb-2">
-              <h3 className="font-semibold">메모장</h3>
-              <span className="text-sm text-neutral-400">회의 중 메모</span>
-            </div>
-            <textarea
-              placeholder="간단 메모를 입력하세요…"
-              className="w-full h-64 rounded-md border-0 bg-neutral-50 p-3 outline-none focus:ring-2 focus:ring-blue-200"
-            />
-          </div>
-
-          {/* 받아쓰기 (보더 제거) */}
-          <div className="p-1 mt-6">
-            <div className="flex items-center gap-2">
-              <div className="w-2 h-2 rounded-full bg-blue-500 animate-pulse" />
-              <h3 className="font-semibold">실시간 받아쓰기</h3>
-            </div>
-            <div className="mt-2 text-sm text-neutral-600 whitespace-pre-wrap min-h-[80px]">
-              {partial}
-            </div>
-            {finals.length > 0 && (
-              <div className="mt-4">
-                <h4 className="font-medium">확정 문장</h4>
-                <ul className="list-disc list-inside text-sm text-neutral-700 mt-1 space-y-1">
-                  {finals.map((t, i) => (
-                    <li key={i}>{t}</li>
-                  ))}
-                </ul>
+        {/* 좌측 — Figma 느낌으로 리디자인 */}
+        <div className="lg:col-span-1 space-y-6">
+          {/* 메모장 카드 */}
+          <div className="rounded-2xl bg-white shadow-sm ring-1 ring-black/5">
+            <div className="px-5 pt-5 pb-2">
+              <div className="flex items-center justify-between">
+                <div>
+                  <div className="text-[12px] text-slate-400 font-medium">회의 중 메모</div>
+                  <h3 className="mt-1 text-[18px] font-semibold text-slate-800">메모장</h3>
+                </div>
+                <span className="inline-flex items-center rounded-full bg-sky-50 text-sky-600 text-[12px] px-2 py-1">
+                  작성 가능
+                </span>
               </div>
-            )}
+            </div>
+            <div className="px-5 pb-5">
+              <textarea
+                placeholder="회의 중 간단하게 메모 입력할 수 있는 칸…"
+                className="w-full h-60 rounded-xl bg-slate-50 border border-slate-200/70 px-4 py-3
+                           text-[14px] text-slate-700 placeholder:text-slate-400
+                           outline-none focus:ring-2 focus:ring-sky-200 focus:border-sky-300 transition"
+              />
+              <p className="mt-2 text-[12px] text-slate-400">Enter 줄바꿈, Ctrl+Enter 문단 구분</p>
+            </div>
+          </div>
+
+          {/* 실시간 받아쓰기 카드 */}
+          <div className="rounded-2xl bg-white shadow-sm ring-1 ring-black/5">
+            <div className="px-5 pt-5">
+              <div className="flex items-center gap-2">
+                <span className="inline-block w-2.5 h-2.5 rounded-full bg-sky-500 animate-pulse" />
+                <div>
+                  <div className="text-[12px] text-slate-400 font-medium">자동 기록</div>
+                  <h3 className="text-[18px] font-semibold text-slate-800">실시간 받아쓰기</h3>
+                </div>
+              </div>
+            </div>
+            <div className="px-5 pb-5">
+              <div className="mt-3 text-[14px] text-slate-700 min-h-[64px] whitespace-pre-wrap">
+                {partial || <span className="text-slate-400">받아쓰는 중…</span>}
+              </div>
+
+              {finals.length > 0 && (
+                <div className="mt-4">
+                  <div className="text-[13px] text-slate-500 mb-2">확정 문장</div>
+                  <ul className="space-y-1.5">
+                    {finals.map((t, i) => (
+                      <li key={i} className="flex items-start gap-2">
+                        <span className="mt-[7px] inline-block w-1.5 h-1.5 rounded-full bg-slate-300" />
+                        <p className="text-[14px] text-slate-800">{t}</p>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+            </div>
           </div>
         </div>
 
-        {/* 우측: RIGHT 탭만 (보더/타이틀 전부 제거) */}
-        <div className="lg:col-span-2">
-          <div className="mt-0 h-[640px] lg:h-[calc(100vh-220px)] overflow-hidden">
-            <RightTabEmbed className="h-full" />
-          </div>
-        </div>
+{/* 우측 — RIGHT 탭 */}
+<div className="lg:col-span-2">
+  <div className="h-[640px] lg:h-[calc(100vh-180px)] overflow-hidden">
+    <RightTabEmbed className="h-full" />
+  </div>
+</div>
+
+
       </div>
     </div>
   );
