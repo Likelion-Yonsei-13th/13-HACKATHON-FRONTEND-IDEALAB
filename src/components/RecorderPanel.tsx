@@ -2,6 +2,8 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
+import dynamic from "next/dynamic";
+const RightTabEmbed = dynamic(() => import("@/components/RightTabEmbed"), { ssr: false });
 
 export type RecorderResult = {
   audioUrl: string;
@@ -115,8 +117,7 @@ export default function RecorderPanel({
             }
           };
 
-          // timeslice 없이 시작 → pause/resume 안정
-          mr.start();
+          mr.start(); // timeslice 없이
           resolve();
         };
 
@@ -290,7 +291,6 @@ export default function RecorderPanel({
         <button
           type="button"
           onClick={handlePauseOrResume}
-          className="h-9 w-9 rounded-full border flex items-center justify-center"
           title={status === "pause" ? "재개" : "일시정지"}
         >
           <img
@@ -304,7 +304,6 @@ export default function RecorderPanel({
         <button
           type="button"
           onClick={handleStop}
-          className="h-9 w-9 rounded-full border flex items-center justify-center"
           title="정지"
         >
           <img src="/icons/정지.png" alt="정지" className="h-6 w-6" />
@@ -321,22 +320,24 @@ export default function RecorderPanel({
         </button>
       </div>
 
-      {/* 본문 레이아웃 */}
+      {/* 본문 레이아웃: 좌측 메모/받아쓰기, 우측 RIGHT 탭만 */}
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-        {/* 좌측: 메모/받아쓰기 */}
+        {/* 좌측 */}
         <div className="lg:col-span-1">
-          <div className="rounded-xl border p-4">
+          {/* 메모장 (보더 제거) */}
+          <div className="p-1">
             <div className="flex items-center justify-between mb-2">
               <h3 className="font-semibold">메모장</h3>
               <span className="text-sm text-neutral-400">회의 중 메모</span>
             </div>
             <textarea
               placeholder="간단 메모를 입력하세요…"
-              className="w-full h-64 rounded-md border p-3 outline-none focus:ring-2 focus:ring-blue-200"
+              className="w-full h-64 rounded-md border-0 bg-neutral-50 p-3 outline-none focus:ring-2 focus:ring-blue-200"
             />
           </div>
 
-          <div className="rounded-xl border p-4 mt-6">
+          {/* 받아쓰기 (보더 제거) */}
+          <div className="p-1 mt-6">
             <div className="flex items-center gap-2">
               <div className="w-2 h-2 rounded-full bg-blue-500 animate-pulse" />
               <h3 className="font-semibold">실시간 받아쓰기</h3>
@@ -357,33 +358,10 @@ export default function RecorderPanel({
           </div>
         </div>
 
-        {/* 우측: 요약/오디오 */}
+        {/* 우측: RIGHT 탭만 (보더/타이틀 전부 제거) */}
         <div className="lg:col-span-2">
-          <div className="rounded-xl border p-4">
-            <div className="flex items-center gap-2">
-              <h3 className="font-semibold">실시간 회의 요약</h3>
-              <span className="text-neutral-400 text-sm">자동 생성</span>
-            </div>
-            {!summary ? (
-              <div className="text-neutral-500 text-sm mt-2">
-                요약을 생성 중입니다… (종료를 누르면 최종 요약이 표시됩니다)
-              </div>
-            ) : (
-              <ul className="list-disc list-inside mt-3 space-y-1">
-                {summary.split(/\n+/).map((s, i) => (
-                  <li key={i}>{s}</li>
-                ))}
-              </ul>
-            )}
-            {audioUrl && (
-              <div className="mt-4">
-                <audio controls src={audioUrl} className="w-full" />
-              </div>
-            )}
-          </div>
-
-          <div className="rounded-xl border p-4 mt-6">
-            <div className="text-neutral-500 text-sm">여기에 지도/필터 등 보조 패널을 배치할 수 있어요.</div>
+          <div className="mt-0 h-[640px] lg:h-[calc(100vh-220px)] overflow-hidden">
+            <RightTabEmbed className="h-full" />
           </div>
         </div>
       </div>

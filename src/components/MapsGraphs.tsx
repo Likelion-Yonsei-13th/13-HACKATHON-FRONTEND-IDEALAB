@@ -11,7 +11,7 @@ interface MapData {
 }
 
 export default function MapsGraphs({ selectedGu }) {
-  // const [geojsonData, setGeojsonData] = useState<any>(null);
+  const [geojsonData, setGeojsonData] = useState<any>(null);
   const [isLoaded, setIsLoaded] = useState(false);
   const [sigData, setSigData] = useState<any>(null);
 
