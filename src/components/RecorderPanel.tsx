@@ -4,7 +4,7 @@
 import { useEffect, useRef, useState } from "react";
 import dynamic from "next/dynamic";
 
-// 우측 보조패널: RIGHT 탭 임베드
+// RIGHT 탭(클라이언트 전용)
 const RightTabEmbed = dynamic(() => import("@/components/RightTabEmbed"), { ssr: false });
 
 export type RecorderResult = {
@@ -13,6 +13,8 @@ export type RecorderResult = {
   summary: string;
 };
 
+type RecStatus = "rec" | "pause" | "processing";
+
 export default function RecorderPanel({
   onClose,
   onFinish,
@@ -20,12 +22,13 @@ export default function RecorderPanel({
   onClose: () => void;
   onFinish: (p: RecorderResult) => void;
 }) {
-  const [status, setStatus] = useState<"rec" | "pause" | "processing">("rec");
+  const [status, setStatus] = useState<RecStatus>("rec");
   const [partial, setPartial] = useState("");
   const [finals, setFinals] = useState<string[]>([]);
   const [summary, setSummary] = useState<string | null>(null);
   const [audioUrl, setAudioUrl] = useState<string | null>(null);
 
+  // ── 내부 상태/리소스 ──
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const micStreamRef = useRef<MediaStream | null>(null);
   const wsRef = useRef<WebSocket | null>(null);
@@ -35,9 +38,9 @@ export default function RecorderPanel({
   const mimeRef = useRef<string>("");
   const finalizedRef = useRef<boolean>(false);
   const chunkTimerRef = useRef<number | null>(null);
-  const hardPausedRef = useRef<boolean>(false);
+  const hardPauseRef = useRef<boolean>(false); // ← 일시정지 목적의 stop 구분
 
-  // ── Endpoints ──
+  // ── Endpoint ──
   const WS_URL =
     typeof location !== "undefined"
       ? `${location.protocol === "https:" ? "wss" : "ws"}://${location.host}/stt/stream`
@@ -45,6 +48,7 @@ export default function RecorderPanel({
   const HTTP_CHUNK_URL = `/stt/chunk`;
   const HTTP_FINALIZE_URL = `/stt/finalize`;
 
+  // 적절한 mime 고르기
   function pickMimeType() {
     if (typeof MediaRecorder !== "undefined") {
       if (MediaRecorder.isTypeSupported("audio/ogg;codecs=opus")) return "audio/ogg;codecs=opus";
@@ -54,7 +58,8 @@ export default function RecorderPanel({
   }
 
   useEffect(() => {
-    start().catch((e) => {
+    // 첫 시작
+    boot().catch((e) => {
       alert("마이크 권한/연결 오류");
       console.error(e);
     });
@@ -62,6 +67,7 @@ export default function RecorderPanel({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // ── 타이머(청크 요청) ──
   function startChunkTimer(mr: MediaRecorder) {
     stopChunkTimer();
     chunkTimerRef.current = window.setInterval(() => {
@@ -77,90 +83,38 @@ export default function RecorderPanel({
     }
   }
 
-  async function start() {
-    if (mediaRecorderRef.current && mediaRecorderRef.current.state !== "inactive") return;
+  // ── 공통: MR 핸들러 장착 ──
+  function wireRecorder(mr: MediaRecorder) {
+    mr.onstart = () => {
+      setStatus("rec");
+      startChunkTimer(mr);
+    };
+    mr.onpause = () => {
+      setStatus("pause");
+      stopChunkTimer();
+    };
+    mr.onresume = () => {
+      setStatus("rec");
+      startChunkTimer(mr);
+    };
+    mr.onstop = () => {
+      // hard pause 목적의 stop이면 'processing' 상태로 바꾸지 않음
+      stopChunkTimer();
+      if (!hardPauseRef.current) setStatus("processing");
+    };
 
-    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-    micStreamRef.current = stream;
+    // 데이터 전송
+    mr.ondataavailable = async (e) => {
+      if (!e.data || e.data.size === 0) return;
 
-    const mime = pickMimeType();
-    mimeRef.current = mime;
-    finalizedRef.current = false;
-
-    // WebSocket 우선
-    try {
-      await new Promise<void>((resolve, reject) => {
-        const codec = mime.includes("ogg") ? "ogg_opus" : mime.includes("webm") ? "webm_opus" : "unknown";
-        const ws = new WebSocket(`${WS_URL}?lang=ko&codec=${codec}`);
-        ws.binaryType = "arraybuffer";
-        wsRef.current = ws;
-        sessionIdRef.current = crypto.randomUUID();
-
-        ws.onopen = () => {
-          ws.send(
-            JSON.stringify({
-              type: "start",
-              sessionId: sessionIdRef.current,
-              contentType: mime || "audio/webm;codecs=opus",
-            }),
-          );
-
-          const mr = new MediaRecorder(stream, mime ? { mimeType: mime } : undefined);
-          mediaRecorderRef.current = mr;
-
-          mr.onstart = () => { setStatus("rec"); startChunkTimer(mr); };
-          mr.onpause = () => { setStatus("pause"); stopChunkTimer(); };
-          mr.onresume = () => { setStatus("rec"); startChunkTimer(mr); };
-          mr.onstop = () => { setStatus("processing"); stopChunkTimer(); };
-
-          mr.ondataavailable = (e) => {
-            if (e.data && e.data.size > 0 && ws.readyState === WebSocket.OPEN) {
-              ws.send(e.data);
-            }
-          };
-
-          mr.start(); // timeslice 없이
-          resolve();
-        };
-
-        ws.onerror = () => reject(new Error("ws-fail"));
-
-        ws.onmessage = (evt) => {
-          try {
-            const m = JSON.parse(evt.data);
-            if (m.type === "partial") setPartial(m.text ?? "");
-            else if (m.type === "final") setFinals((p) => [...p, m.text ?? ""]);
-            else if (m.type === "summary") {
-              if (finalizedRef.current) return;
-              finalizedRef.current = true;
-              setSummary(m.summary ?? "");
-              setAudioUrl(m.audioUrl ?? "");
-              onFinish({
-                audioUrl: m.audioUrl ?? "",
-                transcript: (finals.join("\n") || ""),
-                summary: m.summary ?? "",
-              });
-            }
-          } catch {}
-        };
-      });
-
-      usingWSRef.current = true;
-    } catch {
-      // HTTP 폴백
-      sessionIdRef.current = crypto.randomUUID();
-      const mr = new MediaRecorder(micStreamRef.current!, mime ? { mimeType: mime } : undefined);
-      mediaRecorderRef.current = mr;
-
-      mr.onstart = () => { setStatus("rec"); startChunkTimer(mr); };
-      mr.onpause = () => { setStatus("pause"); stopChunkTimer(); };
-      mr.onresume = () => { setStatus("rec"); startChunkTimer(mr); };
-      mr.onstop = () => { setStatus("processing"); stopChunkTimer(); };
-
-      mr.ondataavailable = async (e) => {
-        if (!e.data || e.data.size === 0) return;
+      if (usingWSRef.current) {
+        if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
+          wsRef.current.send(e.data);
+        }
+      } else {
+        // HTTP 업로드
         const fd = new FormData();
-        fd.append("audio", e.data, `chunk.${mime.includes("ogg") ? "ogg" : "webm"}`);
+        fd.append("audio", e.data, `chunk.${mimeRef.current.includes("ogg") ? "ogg" : "webm"}`);
         fd.append("sessionId", sessionIdRef.current);
         fd.append("lang", "ko");
         try {
@@ -171,13 +125,88 @@ export default function RecorderPanel({
         } catch (err) {
           console.warn("청크 업로드 실패", err);
         }
-      };
+      }
+    };
+  }
 
-      mr.start();
+  // ── MR 생성/시작 (스트림은 살아있다고 가정) ──
+  function createAndStartRecorder() {
+    const stream = micStreamRef.current!;
+    const mr = new MediaRecorder(stream, mimeRef.current ? { mimeType: mimeRef.current } : undefined);
+    mediaRecorderRef.current = mr;
+    wireRecorder(mr);
+    mr.start(); // timeslice 없이
+  }
+
+  // ── WS 메시지 핸들 ──
+  function wireWS(ws: WebSocket) {
+    ws.onmessage = (evt) => {
+      try {
+        const m = JSON.parse(evt.data);
+        if (m.type === "partial") setPartial(m.text ?? "");
+        else if (m.type === "final") setFinals((p) => [...p, m.text ?? ""]);
+        else if (m.type === "summary") {
+          if (finalizedRef.current) return;
+          finalizedRef.current = true;
+          setSummary(m.summary ?? "");
+          setAudioUrl(m.audioUrl ?? "");
+          onFinish({
+            audioUrl: m.audioUrl ?? "",
+            transcript: (finals.join("\n") || ""),
+            summary: m.summary ?? "",
+          });
+        }
+      } catch {}
+    };
+  }
+
+  // ── 초기 부팅: 스트림, 전송 채널, 레코더 ──
+  async function boot() {
+    // 마이크
+    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    micStreamRef.current = stream;
+
+    // mime
+    mimeRef.current = pickMimeType();
+    sessionIdRef.current = crypto.randomUUID();
+    finalizedRef.current = false;
+
+    // 1) WebSocket 시도
+    try {
+      await new Promise<void>((resolve, reject) => {
+        const codec = mimeRef.current.includes("ogg")
+          ? "ogg_opus"
+          : mimeRef.current.includes("webm")
+          ? "webm_opus"
+          : "unknown";
+        const ws = new WebSocket(`${WS_URL}?lang=ko&codec=${codec}`);
+        ws.binaryType = "arraybuffer";
+        wsRef.current = ws;
+
+        ws.onopen = () => {
+          ws.send(
+            JSON.stringify({
+              type: "start",
+              sessionId: sessionIdRef.current,
+              contentType: mimeRef.current || "audio/webm;codecs=opus",
+            }),
+          );
+          wireWS(ws);
+          resolve();
+        };
+        ws.onerror = () => reject(new Error("ws-fail"));
+      });
+
+      usingWSRef.current = true;
+    } catch {
+      // 2) HTTP 폴백
       httpStopRef.current = async () => {
         if (finalizedRef.current) return;
-        const r = await fetch(`${HTTP_FINALIZE_URL}?sessionId=${sessionIdRef.current}`, { method: "POST" });
-        const fin = await r.json(); // {audioUrl, transcript, summary}
+        const r = await fetch(
+          `${HTTP_FINALIZE_URL}?sessionId=${encodeURIComponent(sessionIdRef.current)}`,
+          { method: "POST" },
+        );
+        const fin = await r.json(); // { audioUrl, transcript, summary }
         finalizedRef.current = true;
         setSummary(fin.summary ?? "");
         setAudioUrl(fin.audioUrl ?? "");
@@ -187,28 +216,31 @@ export default function RecorderPanel({
           summary: fin.summary ?? "",
         });
       };
-
       usingWSRef.current = false;
     }
+
+    // 첫 레코더 시작
+    createAndStartRecorder();
   }
 
+  // ── 정리 ──
   function closeWS() {
-    try { if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) wsRef.current.close(); } catch {}
+    try {
+      if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) wsRef.current.close();
+    } catch {}
     wsRef.current = null;
   }
-
-  function stopRecorderOnly() {
-    try { if (mediaRecorderRef.current && mediaRecorderRef.current.state !== "inactive") mediaRecorderRef.current.stop(); } catch {}
-  }
-
   function stopAllTracks() {
-    try { mediaRecorderRef.current?.stream?.getTracks?.().forEach((t) => t.stop()); } catch {}
-    try { micStreamRef.current?.getTracks?.().forEach((t) => t.stop()); } catch {}
+    try {
+      mediaRecorderRef.current?.stream?.getTracks?.().forEach((t) => t.stop());
+    } catch {}
+    try {
+      micStreamRef.current?.getTracks?.forEach((t) => t.stop());
+    } catch {}
     mediaRecorderRef.current = null;
     micStreamRef.current = null;
     stopChunkTimer();
   }
-
   function cleanupSoft() {
     try {
       if (usingWSRef.current && wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
@@ -216,58 +248,68 @@ export default function RecorderPanel({
       }
     } catch {}
   }
-
   function cleanupHard() {
     cleanupSoft();
     closeWS();
     stopAllTracks();
   }
 
-  // ── Controls ──
+  // ── 컨트롤: 일시정지/재개/정지/닫기 ──
   const handlePauseOrResume = async () => {
     const mr = mediaRecorderRef.current;
-    if (!mr) return;
 
-    if (mr.state === "recording") {
-      try { mr.pause(); } catch {}
-      try { micStreamRef.current?.getAudioTracks()?.forEach((t) => (t.enabled = false)); } catch {}
-      hardPausedRef.current = true;
+    // 아직 시작 전이면 무시
+    if (!mr && status === "rec") return;
+
+    // 녹음 중 → 일시정지 (stop으로 플러시만, 세션/WS는 유지)
+    if (mr && mr.state === "recording") {
+      hardPauseRef.current = true;
+      try {
+        mr.stop(); // onstop에서 processing으로 안 바꾸도록 hardPauseRef로 구분
+      } catch {}
       setStatus("pause");
       return;
     }
 
-    if (mr.state === "paused") {
-      try { micStreamRef.current?.getAudioTracks()?.forEach((t) => (t.enabled = true)); } catch {}
-      try {
-        mr.resume();
-        hardPausedRef.current = false;
-        setStatus("rec");
-      } catch {
-        await start();
-        hardPausedRef.current = false;
-        setStatus("rec");
+    // 일시정지 → 재개 (새 MediaRecorder 생성/시작)
+    if (status === "pause") {
+      hardPauseRef.current = false;
+
+      // 스트림이 죽었으면 재획득
+      let stream = micStreamRef.current;
+      if (!stream || stream.getTracks().every((t) => t.readyState === "ended")) {
+        stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        micStreamRef.current = stream;
       }
+
+      createAndStartRecorder();
+      setStatus("rec");
       return;
     }
-
-    await start();
-    setStatus("rec");
   };
 
   const handleStop = async () => {
     if (finalizedRef.current) return;
     setStatus("processing");
-    stopRecorderOnly();
+
+    // 완전 정지
+    try {
+      mediaRecorderRef.current?.stop();
+    } catch {}
     cleanupSoft();
+
+    // HTTP는 finalize 호출
     if (!usingWSRef.current && httpStopRef.current) {
       await httpStopRef.current();
     }
+
     stopAllTracks();
-    setTimeout(closeWS, 1200);
+    setTimeout(closeWS, 800);
   };
 
   const handleClose = async () => {
     await handleStop();
+    // 서버 요약 응답 전에 닫는 경우 최소 결과 전달
     if (onFinish && !finalizedRef.current) {
       onFinish({
         audioUrl: audioUrl || "",
@@ -280,6 +322,7 @@ export default function RecorderPanel({
     onClose();
   };
 
+  // ── UI ──
   return (
     <div className="px-6 pt-3">
       {/* 헤더 */}
@@ -289,11 +332,12 @@ export default function RecorderPanel({
           {status === "rec" ? "녹음 중…" : status === "pause" ? "일시정지" : "처리 중…"}
         </span>
 
-        {/* 일시정지/재개 */}
+        {/* 일시정지/재개 토글 */}
         <button
           type="button"
           onClick={handlePauseOrResume}
           title={status === "pause" ? "재개" : "일시정지"}
+          className="rounded-md p-1 hover:bg-neutral-100"
         >
           <img
             src={status === "pause" ? "/icons/재개.png" : "/icons/일시정지.png"}
@@ -307,6 +351,7 @@ export default function RecorderPanel({
           type="button"
           onClick={handleStop}
           title="정지"
+          className="rounded-md p-1 hover:bg-neutral-100"
         >
           <img src="/icons/정지.png" alt="정지" className="h-6 w-6" />
         </button>
@@ -322,11 +367,11 @@ export default function RecorderPanel({
         </button>
       </div>
 
-      {/* 본문: 좌측(메모/받아쓰기), 우측(RightTab) */}
+      {/* 본문: 좌(메모/받아쓰기) · 우(RIGHT 탭) */}
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-        {/* 좌측 — Figma 느낌으로 리디자인 */}
+        {/* 좌측 */}
         <div className="lg:col-span-1 space-y-6">
-          {/* 메모장 카드 */}
+          {/* 메모장 */}
           <div className="rounded-2xl bg-white shadow-sm ring-1 ring-black/5">
             <div className="px-5 pt-5 pb-2">
               <div className="flex items-center justify-between">
@@ -350,7 +395,7 @@ export default function RecorderPanel({
             </div>
           </div>
 
-          {/* 실시간 받아쓰기 카드 */}
+          {/* 실시간 받아쓰기 */}
           <div className="rounded-2xl bg-white shadow-sm ring-1 ring-black/5">
             <div className="px-5 pt-5">
               <div className="flex items-center gap-2">
@@ -383,14 +428,13 @@ export default function RecorderPanel({
           </div>
         </div>
 
-{/* 우측 — RIGHT 탭 */}
-<div className="lg:col-span-2">
-  <div className="h-[640px] lg:h-[calc(100vh-180px)] overflow-hidden">
-    <RightTabEmbed className="h-full" />
-  </div>
-</div>
-
-
+        {/* 우측: RIGHT 탭 */}
+        <div className="lg:col-span-2">
+          <div className="h-[640px] lg:h-[calc(100vh-180px)] overflow-hidden">
+            {/* @ts-ignore - className만 내려줌 */}
+            <RightTabEmbed className="h-full" />
+          </div>
+        </div>
       </div>
     </div>
   );
