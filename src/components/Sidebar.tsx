@@ -1,23 +1,18 @@
-// components/Sidebar.tsx
+// File: src/components/Sidebar.tsx
 "use client";
 
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import ProjectModal, { NewProject, CreateKind } from "./ProjectModal";
 import EditItemModal from "./EditItemModal";
+import { useUIStore } from "@/store/ui";
 
 type Item = { id: string; title: string; color?: string; icon?: "folder" | "file" };
 type SectionKey = "ws" | "folder" | "file";
 type Section = { key: SectionKey; title: string; items?: Item[] };
 
 const INITIAL_SECTIONS: Section[] = [
-  {
-    key: "ws",
-    title: "멋사의 워크스페이스",
-    items: [      { id: "ws1", title: "해커톤 준비", color: "#ef4444" },
-
-    ],
-  },
+  { key: "ws", title: "멋사의 워크스페이스", items: [{ id: "ws1", title: "해커톤 준비", color: "#ef4444" }] },
   {
     key: "folder",
     title: "내 폴더",
@@ -27,53 +22,43 @@ const INITIAL_SECTIONS: Section[] = [
       { id: "f3", title: "백", color: "#60a5fa" },
     ],
   },
-  {
-    key: "file",
-    title: "내 파일",
-    items: [{ id: "doc", title: "문서 모음", icon: "file", color: "#60a5fa" }],
-  },
+  { key: "file", title: "내 파일", items: [{ id: "doc", title: "문서 모음", icon: "file", color: "#60a5fa" }] },
 ];
 
-// 섹션 키 → 브레드크럼 라벨
-const sectionLabel = (k: SectionKey) =>
-  k === "ws" ? "멋사의 워크스페이스" : k === "folder" ? "내 폴더" : "내 파일";
+const sectionLabel = (k: SectionKey) => (k === "ws" ? "멋사의 워크스페이스" : k === "folder" ? "내 폴더" : "내 파일");
 
 export default function Sidebar() {
   const router = useRouter();
 
-  const [collapsed, setCollapsed] = useState(false);
-  const [open, setOpen] = useState<Record<SectionKey, boolean>>({
-    ws: true,
-    folder: true,
-    file: true,
-  });
+  const sidebarOpen = useUIStore((s) => s.sidebarOpen);
+  const setSidebarOpen = useUIStore((s) => s.setSidebarOpen);
+  const collapsed = useUIStore((s) => s.collapsed);
+  const setCollapsed = useUIStore((s) => s.setCollapsed);
+
+  const [open, setOpen] = useState<Record<SectionKey, boolean>>({ ws: true, folder: true, file: true });
   const [sections, setSections] = useState<Section[]>(INITIAL_SECTIONS);
 
-  // 모달 상태
   const [creatingFor, setCreatingFor] = useState<SectionKey | null>(null);
   const [editing, setEditing] = useState<{ section: SectionKey; id: string } | null>(null);
 
-  /* 접힘 상태 유지 */
   useEffect(() => {
     const saved = typeof window !== "undefined" && localStorage.getItem("sidebar-collapsed");
     if (saved) setCollapsed(saved === "1");
-  }, []);
+  }, [setCollapsed]);
   useEffect(() => {
     if (typeof window !== "undefined") {
       localStorage.setItem("sidebar-collapsed", collapsed ? "1" : "0");
     }
   }, [collapsed]);
 
-  const toggle = (k: SectionKey) => setOpen(prev => ({ ...prev, [k]: !prev[k] }));
+  const toggle = (k: SectionKey) => setOpen((prev) => ({ ...prev, [k]: !prev[k] }));
 
-  /* 새로 만들기 → 저장 → 즉시 이동 */
   const handleCreate = (p: NewProject) => {
     if (!creatingFor) return;
-
     let createdId = "";
 
-    setSections(prev =>
-      prev.map(s => {
+    setSections((prev) =>
+      prev.map((s) => {
         if (s.key !== creatingFor) return s;
         const newItem: Item = {
           id: crypto.randomUUID(),
@@ -87,27 +72,21 @@ export default function Sidebar() {
     );
 
     const label = sectionLabel(creatingFor);
-    // 문서/메타/브레드크럼 저장
     localStorage.setItem(`doc:${createdId}`, "");
     localStorage.setItem(`meta:${createdId}`, JSON.stringify({ section: label, title: p.title }));
     localStorage.setItem("ws:breadcrumb", JSON.stringify({ section: label, title: p.title }));
-
     setCreatingFor(null);
     router.push(`/ws/${createdId}`);
   };
 
-  /* 수정 저장: 목록 + meta:{id} 동시 반영, 열려있으면 브레드크럼도 갱신 */
   const handleSaveEdit = (val: { title: string; color?: string }) => {
     if (!editing) return;
-
-    setSections(prev =>
-      prev.map(s => {
+    setSections((prev) =>
+      prev.map((s) => {
         if (s.key !== editing.section) return s;
         return {
           ...s,
-          items: (s.items ?? []).map(it =>
-            it.id === editing.id ? { ...it, title: val.title, color: val.color ?? it.color } : it
-          ),
+          items: (s.items ?? []).map((it) => (it.id === editing.id ? { ...it, title: val.title, color: val.color ?? it.color } : it)),
         };
       })
     );
@@ -116,36 +95,24 @@ export default function Sidebar() {
       const raw = localStorage.getItem(`meta:${editing.id}`);
       const prevMeta = raw ? JSON.parse(raw) : {};
       localStorage.setItem(`meta:${editing.id}`, JSON.stringify({ ...prevMeta, title: val.title }));
-
       if (location.pathname.includes(`/ws/${editing.id}`)) {
-        localStorage.setItem(
-          "ws:breadcrumb",
-          JSON.stringify({ section: sectionLabel(editing.section), title: val.title })
-        );
+        localStorage.setItem("ws:breadcrumb", JSON.stringify({ section: sectionLabel(editing.section), title: val.title }));
       }
     } catch {}
-
     setEditing(null);
   };
 
-  /* 로그아웃: 서버 세션 정리(선택) + 로그인 화면으로 이동 */
   const handleLogout = async () => {
-    try {
-      await fetch("/api/logout", { method: "POST" });
-    } catch {}
+    try { await fetch("/api/logout", { method: "POST" }); } catch {}
     localStorage.removeItem("ws:breadcrumb");
     router.replace("/login");
   };
 
-  const modalKind: CreateKind =
-    creatingFor === "ws" ? "project" : creatingFor === "folder" ? "folder" : "file";
-
-  const handleLogoClick = () => { if (collapsed) setCollapsed(false); };
+  const modalKind: CreateKind = creatingFor === "ws" ? "project" : creatingFor === "folder" ? "folder" : "file";
   const showTitle = (t: string) => (t.length > 10 ? t.slice(0, 10) + "…" : t);
 
-  /* 공용 아이템 렌더러 */
   const renderItems = (key: SectionKey) =>
-    sections.find(s => s.key === key)?.items?.map(it => (
+    sections.find((s) => s.key === key)?.items?.map((it) => (
       <div
         key={it.id}
         role="button"
@@ -170,8 +137,6 @@ export default function Sidebar() {
       >
         <span className="inline-block h-3 w-3 rounded-sm" style={{ background: it.color ?? "#d1d5db" }} />
         <span className="truncate">{showTitle(it.title)}</span>
-
-        {/* 연필 버튼(수정) */}
         <button
           type="button"
           onClick={(e) => { e.stopPropagation(); setEditing({ section: key, id: it.id }); }}
@@ -184,6 +149,25 @@ export default function Sidebar() {
       </div>
     ));
 
+  /* 🔁 완전 숨김 상태: 얇은 레일(메인로고만) */
+  if (!sidebarOpen) {
+    return (
+      <aside className="sticky top-0 h-dvh w-[52px] border-r bg-white hidden md:flex">
+        <button
+          type="button"
+          onClick={() => { setSidebarOpen(true); setCollapsed(false); }}
+          className="w-full h-14 flex items-center justify-center hover:bg-neutral-50"
+          title="사이드바 펼치기"
+          aria-label="expand sidebar"
+        >
+          {/* ✅ 메인로고 */}
+          <img src="/logos/메인로고.png" alt="IDEALab" className="h-8 w-auto" />
+        </button>
+      </aside>
+    );
+  }
+
+  /* 기본 사이드바 (접힘/펼침) */
   return (
     <aside
       className={[
@@ -197,30 +181,39 @@ export default function Sidebar() {
         {/* 상단 바 */}
         <div className="h-14 border-b">
           <div className="h-full flex items-center gap-2 px-3">
-            <img src="/logos/메인로고.png" alt="app" className="h-8 w-auto" />
+            {/* ✅ 메인로고: 접혀있을 때는 '펼치기' 버튼 역할 */}
             <button
               type="button"
-              onClick={handleLogoClick}
-              className={["relative flex items-center", collapsed ? "opacity-60 hover:opacity-100" : ""].join(" ")}
-              title={collapsed ? "펼치기" : "IDEALab"}
-              aria-label="logo-expand"
+              onClick={() => { setSidebarOpen(true); setCollapsed(false); }}
+              className="flex items-center gap-2"
+              title="사이드바 펼치기"
+              aria-label="expand sidebar"
             >
-              {!collapsed && <img src="/logos/IDEAL.png" alt="IDEA" className="h-7" />}
-              {!collapsed && <img src="/logos/Lab.png" alt="Lab" className="h-7 -ml-4 relative z-10" />}
+              <img src="/logos/메인로고.png" alt="IDEALab" className="h-8 w-auto" />
+              {!collapsed && (
+                <>
+                  <img src="/logos/IDEAL.png" alt="IDEA" className="h-7" />
+                  <img src="/logos/Lab.png" alt="Lab" className="h-7 -ml-6 relative z-10" />
+                </>
+              )}
             </button>
-            <button
-              onClick={() => setCollapsed(v => !v)}
-              className="ml-auto rounded-md p-1.5 hover:bg-neutral-100"
-              title={collapsed ? "펼치기" : "접기"}
-              aria-label="collapse"
-            >
-              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"
-                   fill="none" stroke="currentColor" strokeWidth="2"
-                   strokeLinecap="round" strokeLinejoin="round"
-                   className={["h-3.5 w-3.5", collapsed ? "" : "rotate-180"].join(" ")}>
-                <path d="m9 18 6-6-6-6" />
-              </svg>
-            </button>
+
+            {/* ⛳ 화살표 토글은 '펼쳐져 있을 때만' 보여줌 (접힌 상태에선 숨김) */}
+            {!collapsed && (
+              <button
+                onClick={() => { setSidebarOpen(true); setCollapsed(true); }}
+                className="ml-auto rounded-md p-1.5 hover:bg-neutral-100"
+                title="접기"
+                aria-label="collapse"
+              >
+                <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"
+                     fill="none" stroke="currentColor" strokeWidth="2"
+                     strokeLinecap="round" strokeLinejoin="round"
+                     className="h-3.5 w-3.5 rotate-180">
+                  <path d="m9 18 6-6-6-6" />
+                </svg>
+              </button>
+            )}
           </div>
         </div>
 
@@ -247,10 +240,7 @@ export default function Sidebar() {
           {open.ws && !collapsed && (
             <div className="mt-1 ml-3 pl-3 border-l border-neutral-200/70 space-y-1">
               {renderItems("ws")}
-              <button
-                className="ml-1 mt-1 text-left text-sm text-blue-600 hover:underline"
-                onClick={() => setCreatingFor("ws")}
-              >
+              <button className="ml-1 mt-1 text-left text-sm text-blue-600 hover:underline" onClick={() => setCreatingFor("ws")}>
                 + 새 프로젝트 만들기
               </button>
             </div>
@@ -259,34 +249,12 @@ export default function Sidebar() {
 
         {/* 내 폴더 / 내 파일 */}
         <nav className="flex-1 overflow-y-auto px-2 pt-2">
-          <SectionHeader
-            title="내 폴더"
-            open={open.folder}
-            onToggle={() => toggle("folder")}
-            collapsed={collapsed}
-            leftIconUrl="/icons/folder.png"
-            onAdd={() => setCreatingFor("folder")}
-          />
-          {open.folder && !collapsed && (
-            <div className="mt-1 ml-3 pl-3 border-l border-neutral-200/70 space-y-1">
-              {renderItems("folder")}
-            </div>
-          )}
+          <SectionHeader title="내 폴더" open={open.folder} onToggle={() => toggle("folder")} collapsed={collapsed} leftIconUrl="/icons/folder.png" onAdd={() => setCreatingFor("folder")} />
+          {open.folder && !collapsed && <div className="mt-1 ml-3 pl-3 border-l border-neutral-200/70 space-y-1">{renderItems("folder")}</div>}
 
           <div className="mt-2" />
-          <SectionHeader
-            title="내 파일"
-            open={open.file}
-            onToggle={() => toggle("file")}
-            collapsed={collapsed}
-            leftIconUrl="/icons/file.png"
-            onAdd={() => setCreatingFor("file")}
-          />
-          {open.file && !collapsed && (
-            <div className="mt-1 ml-3 pl-3 border-l border-neutral-200/70 space-y-1">
-              {renderItems("file")}
-            </div>
-          )}
+          <SectionHeader title="내 파일" open={open.file} onToggle={() => toggle("file")} collapsed={collapsed} leftIconUrl="/icons/file.png" onAdd={() => setCreatingFor("file")} />
+          {open.file && !collapsed && <div className="mt-1 ml-3 pl-3 border-l border-neutral-200/70 space-y-1">{renderItems("file")}</div>}
         </nav>
 
         {/* 하단 바 */}
@@ -294,40 +262,19 @@ export default function Sidebar() {
           <div className={`flex ${collapsed ? "justify-center" : "justify-between"} px-3 py-2`}>
             <img src="/icons/사람.png" alt="me" className="h-5 w-5 opacity-80" />
             {!collapsed && <div />}
-            <img src="/icons/설정.png" alt="settings" className="h-5 w-5 opacity-80" />
-            {!collapsed && <div />}
-
-            {/* 로그아웃 */}
-            <button
-              type="button"
-              onClick={handleLogout}
-              title="로그아웃"
-              aria-label="logout"
-              className="rounded p-0.5 hover:bg-neutral-100"
-            >
+            <button type="button" onClick={handleLogout} title="로그아웃" aria-label="logout" className="rounded p-0.5 hover:bg-neutral-100">
               <img src="/icons/나가기.png" alt="logout" className="h-5 w-5 opacity-80" />
             </button>
           </div>
         </div>
       </div>
 
-      {/* 생성 모달 */}
-      <ProjectModal
-        open={!!creatingFor}
-        kind={modalKind}
-        onClose={() => setCreatingFor(null)}
-        onCreate={handleCreate}
-      />
-
-      {/* 수정 모달 */}
+      {/* 생성/수정 모달 */}
+      <ProjectModal open={!!creatingFor} kind={modalKind} onClose={() => setCreatingFor(null)} onCreate={handleCreate} />
       <EditItemModal
         open={!!editing}
-        initialTitle={
-          editing ? (sections.find(s => s.key === editing.section)?.items?.find(i => i.id === editing.id)?.title ?? "") : ""
-        }
-        initialColor={
-          editing ? (sections.find(s => s.key === editing.section)?.items?.find(i => i.id === editing.id)?.color) : undefined
-        }
+        initialTitle={editing ? sections.find((s) => s.key === editing.section)?.items?.find((i) => i.id === editing.id)?.title ?? "" : ""}
+        initialColor={editing ? sections.find((s) => s.key === editing.section)?.items?.find((i) => i.id === editing.id)?.color : undefined}
         onClose={() => setEditing(null)}
         onSave={handleSaveEdit}
       />
@@ -337,32 +284,12 @@ export default function Sidebar() {
 
 /* 섹션 헤더 */
 function SectionHeader({
-  title,
-  open,
-  onToggle,
-  collapsed,
-  leftIconUrl,
-  onAdd,
-}: {
-  title: string;
-  open: boolean;
-  onToggle: () => void;
-  collapsed: boolean;
-  leftIconUrl?: string;
-  onAdd?: () => void;
-}) {
+  title, open, onToggle, collapsed, leftIconUrl, onAdd,
+}: { title: string; open: boolean; onToggle: () => void; collapsed: boolean; leftIconUrl?: string; onAdd?: () => void; }) {
   return (
-    <div
-      className={`group flex w-full items-center gap-2 rounded-lg px-2 py-2 text-sm ${
-        open ? "bg-blue-50 border border-blue-100" : "hover:bg-neutral-50"
-      }`}
-    >
+    <div className={`group flex w-full items-center gap-2 rounded-lg px-2 py-2 text-sm ${open ? "bg-blue-50 border border-blue-100" : "hover:bg-neutral-50"}`}>
       <button type="button" onClick={onToggle} className="flex flex-1 items-center gap-2 text-left">
-        {leftIconUrl ? (
-          <img src={leftIconUrl} alt="" className="h-[18px] w-[18px]" />
-        ) : (
-          <span className="inline-block h-[18px] w-[18px]" />
-        )}
+        {leftIconUrl ? <img src={leftIconUrl} alt="" className="h-[18px] w-[18px]" /> : <span className="inline-block h-[18px] w-[18px]" />}
         {!collapsed && <span className="font-medium">{title}</span>}
       </button>
       {!collapsed && (
@@ -378,23 +305,11 @@ function SectionHeader({
               <span className="text-sm leading-none">+</span>
             </button>
           )}
-          <button
-            type="button"
-            onClick={onToggle}
-            className="inline-flex h-5 w-5 items-center justify-center"
-            aria-label="toggle"
-            title="toggle"
-          >
-            <svg
-              xmlns="http://www.w3.org/2000/svg"
-              viewBox="0 0 24 24"
-              fill="none"
-              stroke="currentColor"
-              strokeWidth="2"
-              strokeLinecap="round"
-              strokeLinejoin="round"
-              className={`h-3.5 w-3.5 ${open ? "" : "rotate-180"}`}
-            >
+          <button type="button" onClick={onToggle} className="inline-flex h-5 w-5 items-center justify-center" aria-label="toggle" title="toggle">
+            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"
+                 fill="none" stroke="currentColor" strokeWidth="2"
+                 strokeLinecap="round" strokeLinejoin="round"
+                 className={`h-3.5 w-3.5 ${open ? "" : "rotate-180"}`}>
               <path d="m6 9 6 6 6-6" />
             </svg>
           </button>
