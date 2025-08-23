@@ -95,31 +95,28 @@ export default function CategorySelector() {
 
   return (
     <div className="flex items-center bg-white p-2 rounded-lg shadow-lg">
-      <div className="pr-4 border-r">
-        <p className="text-sm text-gray-500">업종</p>
-      </div>
-
-      <div className="flex items-center pl-4">
+      <div className="flex items-center pr-4 border-r flex-shrink-0">
+        <p className="text-sm text-gray-500 mr-4 whitespace-nowrap">업종</p>
         <button
           onClick={handleSelectAll}
-          className={`font-bold mr-4 ${
+          className={`font-bold mr-4 whitespace-nowrap ${
             !isAnyCategorySelected ? "text-blue-500" : "text-black"
           }`}
         >
           전체
         </button>
+      </div>
 
-        <div className="flex items-center -space-x-4">
-          {Object.entries(CATEGORY_DATA).map(([category, items]) => (
-            <CategoryDropdown
-              key={category}
-              title={category}
-              items={items}
-              selectedItem={selections[category]}
-              onSelect={(item) => handleSelect(category, item)}
-            />
-          ))}
-        </div>
+      <div className="flex items-center pl-4 -space-x-4">
+        {Object.entries(CATEGORY_DATA).map(([category, items]) => (
+          <CategoryDropdown
+            key={category}
+            title={category}
+            items={items}
+            selectedItem={selections[category]}
+            onSelect={(item) => handleSelect(category, item)}
+          />
+        ))}
       </div>
     </div>
   );
