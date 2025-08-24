@@ -391,7 +391,7 @@ export default function RecorderPanel({
                            text-[14px] text-slate-700 placeholder:text-slate-400
                            outline-none focus:ring-2 focus:ring-sky-200 focus:border-sky-300 transition"
               />
-              <p className="mt-2 text-[12px] text-slate-400">Enter 줄바꿈, Ctrl+Enter 문단 구분</p>
+              <p className="mt-2 text-[12px] text-slate-400">Enter 줄바꿈</p>
             </div>
           </div>
 
