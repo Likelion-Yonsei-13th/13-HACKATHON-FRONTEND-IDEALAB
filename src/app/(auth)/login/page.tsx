@@ -2,9 +2,9 @@
 "use client";
 
 import { useRouter, useSearchParams } from "next/navigation";
-import { useState } from "react";
+import { useState, Suspense } from "react";
 
-export default function LoginPage() {
+function LoginForm() {
   const router = useRouter();
   const sp = useSearchParams();
   const next = sp.get("next") || "/ws/p1";
@@ -39,50 +39,54 @@ export default function LoginPage() {
   };
 
   return (
+    <form onSubmit={submit} className="space-y-4">
+      <input
+        type="email"
+        className="w-full rounded-md border px-3 py-2 outline-none focus:ring-2 focus:ring-blue-400"
+        placeholder="이메일"
+        autoComplete="username"
+        value={email}
+        onChange={(e) => setEmail(e.target.value)}
+        required
+      />
+
+      <input
+        type="password"
+        className="w-full rounded-md border px-3 py-2 outline-none focus:ring-2 focus:ring-blue-400"
+        placeholder="비밀번호"
+        autoComplete="current-password"
+        value={pw}
+        onChange={(e) => setPw(e.target.value)}
+        required
+      />
+
+      {err && <p className="text-sm text-red-600">{err}</p>}
+
+      <button
+        type="submit"
+        disabled={loading}
+        className="w-full rounded-md bg-blue-600 py-2 text-white hover:bg-blue-700 disabled:opacity-50"
+      >
+        {loading ? "로그인 중..." : "로그인"}
+      </button>
+    </form>
+  );
+}
+
+export default function LoginPage() {
+  return (
     <div className="min-h-dvh flex items-center justify-center">
       <div className="w-[420px] rounded-2xl bg-white p-8 shadow-lg">
-        {/* 로고 영역 */}
+        {/* 로고 */}
         <div className="flex items-center justify-center mb-8">
           <img src="/logos/IDEAL.png" className="h-8" alt="IDEA" />
-          <img
-            src="/logos/Lab.png"
-            className="h-8 -ml-5 relative z-10"
-            alt="Lab"
-          />
+          <img src="/logos/Lab.png" className="h-8 -ml-5 relative z-10" alt="Lab" />
         </div>
 
         {/* 로그인 폼 */}
-        <form onSubmit={submit} className="space-y-4">
-          <input
-            type="email"
-            className="w-full rounded-md border px-3 py-2 outline-none focus:ring-2 focus:ring-blue-400"
-            placeholder="이메일"
-            autoComplete="username"
-            value={email}
-            onChange={(e) => setEmail(e.target.value)}
-            required
-          />
-
-          <input
-            type="password"
-            className="w-full rounded-md border px-3 py-2 outline-none focus:ring-2 focus:ring-blue-400"
-            placeholder="비밀번호"
-            autoComplete="current-password"
-            value={pw}
-            onChange={(e) => setPw(e.target.value)}
-            required
-          />
-
-          {err && <p className="text-sm text-red-600">{err}</p>}
-
-          <button
-            type="submit"
-            disabled={loading}
-            className="w-full rounded-md bg-blue-600 py-2 text-white hover:bg-blue-700 disabled:opacity-50"
-          >
-            {loading ? "로그인 중..." : "로그인"}
-          </button>
-        </form>
+        <Suspense fallback={<div>로딩 중...</div>}>
+          <LoginForm />
+        </Suspense>
 
         {/* 회원가입 링크 */}
         <div className="mt-5 text-center text-sm text-neutral-600">
