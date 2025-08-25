@@ -1,12 +1,12 @@
+// src/components/Sidebar.tsx
 "use client";
 
 import { useEffect, useState } from "react";
-import { useRouter } from "next/navigation";
+import { useRouter, usePathname } from "next/navigation"; // ✅ 경로 확인용
 import ProjectModal, { NewProject, CreateKind } from "./ProjectModal";
 import EditItemModal from "./EditItemModal";
 import { useUIStore } from "@/store/ui";
-import Link from "next/link";
-import MyPage from "./MyPage";
+import Link from "next/link"; // (사용 안 하면 지워도 OK)
 
 type Item = {
   id: string;
@@ -44,6 +44,7 @@ const sectionLabel = (k: SectionKey) =>
 
 export default function Sidebar() {
   const router = useRouter();
+  const pathname = usePathname(); // ✅ 현재 경로
 
   const sidebarOpen = useUIStore((s) => s.sidebarOpen);
   const setSidebarOpen = useUIStore((s) => s.setSidebarOpen);
@@ -62,6 +63,12 @@ export default function Sidebar() {
     section: SectionKey;
     id: string;
   } | null>(null);
+
+  // ✅ /ws/[id] 에서 id 추출해 active 판단
+  const activeId =
+    pathname && pathname.startsWith("/ws/")
+      ? pathname.split("/")[2] || null
+      : null;
 
   useEffect(() => {
     const saved =
@@ -162,29 +169,18 @@ export default function Sidebar() {
       : "file";
   const showTitle = (t: string) => (t.length > 10 ? t.slice(0, 10) + "…" : t);
 
+  // ✅ 여기만 변경: active면 색상 강조
   const renderItems = (key: SectionKey) =>
     sections
       .find((s) => s.key === key)
-      ?.items?.map((it) => (
-        <div
-          key={it.id}
-          role="button"
-          tabIndex={0}
-          onClick={() => {
-            const label = sectionLabel(key);
-            localStorage.setItem(
-              "ws:breadcrumb",
-              JSON.stringify({ section: label, title: it.title })
-            );
-            localStorage.setItem(
-              `meta:${it.id}`,
-              JSON.stringify({ section: label, title: it.title })
-            );
-            router.push(`/ws/${it.id}`);
-          }}
-          onKeyDown={(e) => {
-            if (e.key === "Enter" || e.key === " ") {
-              e.preventDefault();
+      ?.items?.map((it) => {
+        const active = it.id === activeId;
+        return (
+          <div
+            key={it.id}
+            role="button"
+            tabIndex={0}
+            onClick={() => {
               const label = sectionLabel(key);
               localStorage.setItem(
                 "ws:breadcrumb",
@@ -195,34 +191,54 @@ export default function Sidebar() {
                 JSON.stringify({ section: label, title: it.title })
               );
               router.push(`/ws/${it.id}`);
-            }
-          }}
-          className="w-full flex items-center gap-2 rounded-md px-3 py-2 text-sm border border-neutral-200 bg-white hover:bg-neutral-50 cursor-pointer"
-          title={it.title}
-        >
-          <span
-            className="inline-block h-3 w-3 rounded-sm"
-            style={{ background: it.color ?? "#d1d5db" }}
-          />
-          <span className="truncate">{showTitle(it.title)}</span>
-          <button
-            type="button"
-            onClick={(e) => {
-              e.stopPropagation();
-              setEditing({ section: key, id: it.id });
             }}
-            className="ml-auto inline-flex items-center justify-center"
-            aria-label="수정"
-            title="수정"
+            onKeyDown={(e) => {
+              if (e.key === "Enter" || e.key === " ") {
+                e.preventDefault();
+                const label = sectionLabel(key);
+                localStorage.setItem(
+                  "ws:breadcrumb",
+                  JSON.stringify({ section: label, title: it.title })
+                );
+                localStorage.setItem(
+                  `meta:${it.id}`,
+                  JSON.stringify({ section: label, title: it.title })
+                );
+                router.push(`/ws/${it.id}`);
+              }
+            }}
+            className={[
+              "w-full flex items-center gap-2 rounded-md px-3 py-2 text-sm border cursor-pointer",
+              active
+                ? "bg-blue-100/80 border-blue-400 text-blue-800 font-semibold"
+                : "border-neutral-200 bg-white hover:bg-neutral-50",
+            ].join(" ")}
+            title={it.title}
           >
-            <img
-              src="/icons/수정하기.png"
-              alt="edit"
-              className="h-4 w-4 opacity-60 hover:opacity-100"
+            <span
+              className="inline-block h-3 w-3 rounded-sm"
+              style={{ background: it.color ?? "#d1d5db" }}
             />
-          </button>
-        </div>
-      ));
+            <span className="truncate">{showTitle(it.title)}</span>
+            <button
+              type="button"
+              onClick={(e) => {
+                e.stopPropagation();
+                setEditing({ section: key, id: it.id });
+              }}
+              className="ml-auto inline-flex items-center justify-center"
+              aria-label="수정"
+              title="수정"
+            >
+              <img
+                src="/icons/수정하기.png"
+                alt="edit"
+                className="h-4 w-4 opacity-60 hover:opacity-100"
+              />
+            </button>
+          </div>
+        );
+      });
 
   /* 🔁 완전 숨김 상태: 얇은 레일(메인로고만) */
   if (!sidebarOpen) {
@@ -322,7 +338,7 @@ export default function Sidebar() {
                 : "border border-transparent hover:bg-neutral-50",
             ].join(" ")}
           >
-            {/* ✅ 색상 블록 아이콘 복원 */}
+            {/* 색상 블록 아이콘 */}
             <span className="mr-2 inline-block h-3 w-3 rounded-sm bg-[#3b82f6]" />
             {!collapsed && (
               <span className="font-medium">멋사의 워크스페이스</span>
@@ -396,16 +412,14 @@ export default function Sidebar() {
               collapsed ? "justify-center" : "justify-between"
             } px-3 py-2`}
           >
-            <Link href="/mypage">
-              <button>
-                <img
-                  src="/icons/사람.png"
-                  alt="me"
-                  className="h-5 w-5 opacity-80"
-                />
-                {!collapsed && <div />}
-              </button>
-            </Link>
+            <button>
+              <img
+                src="/icons/사람.png"
+                alt="me"
+                className="h-5 w-5 opacity-80"
+              />
+              {!collapsed && <div />}
+            </button>
 
             <button
               type="button"

@@ -23,6 +23,70 @@ declare global {
   }
 }
 
+/* -------------------------------------------------------
+ * 유틸: 백엔드 응답 포맷을 최대한 유연하게 파싱
+ *  - finalize 응답과 live minutes 응답 모두 커버
+ * -----------------------------------------------------*/
+type AnyJson = Record<string, any>;
+
+function pickOverallSummary(j: AnyJson): string {
+  // 대표 요약 텍스트 후보
+  return (
+    j?.overall_summary ??
+    j?.summary ??
+    j?.minutes ??
+    j?.text ??
+    j?.content ??
+    j?.result?.overall_summary ??
+    j?.result?.summary ??
+    ""
+  );
+}
+
+function pickTopics(j: AnyJson): string[] {
+  const raw = j?.topics;
+  if (!Array.isArray(raw)) return [];
+  // 지원 포맷: [{topic, summary}] or [string]
+  return raw.map((t: any) => {
+    if (typeof t === "string") return `• ${t}`;
+    const head = t?.topic || t?.title || "";
+    const tail = t?.summary || t?.desc || "";
+    return `• ${head}${tail ? ` — ${tail}` : ""}`;
+  });
+}
+
+function pickActionItems(j: AnyJson): string[] {
+  const raw = j?.action_items ?? j?.actions ?? j?.todos;
+  if (!Array.isArray(raw)) return [];
+  return raw.map((a: any) => {
+    if (typeof a === "string") return `- ${a}`;
+    return `- ${a?.text ?? a?.title ?? ""}`;
+  });
+}
+
+function composeSummaryText(j: AnyJson): string {
+  const lines: string[] = [];
+  const overall = pickOverallSummary(j);
+  if (overall) lines.push(overall.trim());
+
+  const topics = pickTopics(j);
+  if (topics.length) {
+    if (lines.length) lines.push(""); // 구분 빈 줄
+    lines.push("Topics:");
+    lines.push(...topics);
+  }
+
+  const actions = pickActionItems(j);
+  if (actions.length) {
+    if (lines.length) lines.push("");
+    lines.push("Action items:");
+    lines.push(...actions);
+  }
+
+  // 다른 필드가 하나도 없을 때 대비
+  return (lines.join("\n") || "").trim();
+}
+
 export default function RecorderPanel({
   meetingId, // 숫자 아닌 값이 오더라도 내부에서 가드
   onClose,
@@ -79,11 +143,13 @@ export default function RecorderPanel({
   async function finalizeMeeting() {
     // meetingId가 없으면 로컬 결과만 반환
     if (!canCallApi) {
+      const localSummary = (finals.join(" ").trim() || "").slice(0, 1000);
       onFinish({
         audioUrl: "",
         transcript: finals.join("\n"),
-        summary: summary || "",
+        summary: localSummary,
       });
+      setSummary(localSummary);
       return;
     }
 
@@ -92,13 +158,25 @@ export default function RecorderPanel({
         method: "POST",
         credentials: "include",
       });
-      const data = (await res.json().catch(() => ({}))) as any;
+      const j: AnyJson = await res.json().catch(() => ({} as AnyJson));
+
+      if (!res.ok) {
+        console.warn("[finalize] http error", res.status, j);
+      }
+
+      // ✅ 어떤 키로 와도 요약이 보이게 파싱
+      const finalSummary = composeSummaryText(j) || summary || "";
+      const transcript =
+        j?.transcript ||
+        j?.text ||
+        finals.join("\n");
+
       onFinish({
-        audioUrl: data.audioUrl || "",
-        transcript: data.transcript || finals.join("\n"),
-        summary: data.summary || "",
+        audioUrl: j?.audioUrl || "",
+        transcript,
+        summary: finalSummary,
       });
-      setSummary(data.summary || "");
+      setSummary(finalSummary);
     } catch (e) {
       console.warn("[finalize] error", e);
       onFinish({
@@ -194,11 +272,18 @@ export default function RecorderPanel({
         method: "GET",
         credentials: "include",
       });
-      if (!r.ok) throw new Error(`live minutes ${r.status}`);
-      const j = await r.json();
+      const j: AnyJson = await r.json().catch(() => ({} as AnyJson));
 
-      // 백 응답 키 유연 처리
-      const text: string = j?.summary || j?.minutes || j?.text || j?.content || "";
+      if (!r.ok) {
+        console.warn("live minutes http error", r.status, j);
+        if (!liveLatest) {
+          setLiveLatest("요약을 불러오지 못했습니다. 네트워크/권한을 확인한 뒤 다시 시도해 주세요.");
+        }
+        return;
+      }
+
+      // ✅ 다양한 키를 한 줄 문자열로 합성
+      const text = composeSummaryText(j);
 
       if (text) {
         setLiveLatest(text);
@@ -223,6 +308,7 @@ export default function RecorderPanel({
     stopLivePolling();
     if (!canCallApi) return; // 숫자 ID 없으면 시작하지 않음
     fetchLiveMinutes(); // 즉시 1회
+    // ⬇️ 기본 3분. 데모 중 빠르게 보고 싶으면 30초로 잠깐 낮춰도 됨.
     livePollRef.current = setInterval(fetchLiveMinutes, 3 * 60 * 1000);
   };
   const stopLivePolling = () => {
