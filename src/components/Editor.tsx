@@ -320,54 +320,53 @@ export default function Editor({
   /* ---------- 자동 저장 ---------- */
   const saveCtrlRef = useRef<AbortController | null>(null);
 
-  const saveToServer = useMemo(
-    () =>
-      debounce(async (html: string) => {
-        try {
-          const info = await ensureBlockId(() => html);
-          if (!info.id || info.ver == null) {
-            console.warn("[autosave] block id / version 확보 실패 → 스킵");
-            return;
-          }
-
-          if (saveCtrlRef.current) saveCtrlRef.current.abort();
-          const ctrl = new AbortController();
-          saveCtrlRef.current = ctrl;
-
-          // 1차 시도
-          try {
-            const r1 = await apiPatchBlock(info.id, html, info.ver);
-            setVersion(r1.version);
-            return;
-          } catch (e: any) {
-            // 409 버전 충돌 → 서버 최신버전으로 1회 재시도
-            if (e?.status === 409) {
-              const latest = Number(e.currentVersion ?? info.ver);
-              if (!Number.isNaN(latest)) {
-                try {
-                  const r2 = await apiPatchBlock(info.id, html, latest);
-                  setVersion(r2.version);
-                  return;
-                } catch (e2) {
-                  console.warn("자동저장 재시도 실패:", e2);
-                }
-              }
-            }
-            throw e;
-          }
-        } catch (e: any) {
-          // 실패 시 서버에서 최신 버전만 동기화 시도
-          try {
-            if (blockId) {
-              const fresh = await apiGetBlock(blockId);
-              setVersion(fresh.version);
-            }
-          } catch {}
-          console.warn("자동 저장 실패:", e);
+const saveToServer = useMemo(
+  () =>
+    debounce(async (html: string) => {
+      try {
+        const info = await ensureBlockId(() => html);
+        if (!info.id || info.ver == null) {
+          console.warn("[autosave] block id / version 확보 실패 → 스킵");
+          return;
         }
-      }, 800),
-    [blockId, version, numericMeeting]
-  );
+
+        if (saveCtrlRef.current) saveCtrlRef.current.abort();
+        const ctrl = new AbortController();
+        saveCtrlRef.current = ctrl;
+
+        // 1차 시도
+        try {
+          const r1 = await apiPatchBlock(info.id, html, info.ver);
+          setVersion(r1.version);
+          return;
+        } catch (e: any) {
+          if (e?.status === 409) {
+            // ✅ 응답 본문에 currentVersion이 없더라도, 무조건 GET으로 최신 버전 가져와서 재시도
+            try {
+              const latest = await apiGetBlock(info.id);
+              const r2 = await apiPatchBlock(info.id, html, latest.version);
+              setVersion(r2.version);
+              return;
+            } catch (e2) {
+              console.warn("자동저장 재시도 실패:", e2);
+            }
+          }
+          throw e;
+        }
+      } catch (e: any) {
+        // 마지막으로 서버 버전 동기화만 시도
+        try {
+          if (blockId) {
+            const fresh = await apiGetBlock(blockId);
+            setVersion(fresh.version);
+          }
+        } catch {}
+        console.warn("자동 저장 실패:", e);
+      }
+    }, 800),
+  [blockId, version, numericMeeting]
+);
+
 
   useEffect(() => {
     if (!editor) return;
