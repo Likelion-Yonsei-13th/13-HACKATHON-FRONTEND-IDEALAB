@@ -24,23 +24,32 @@ function LoginForm() {
       const r = await fetch(ENDPOINTS.auth.login, {
         method: "POST",
         headers: { "content-type": "application/json" },
-        // 쿠키/세션 쓰는 백엔드라면 주석 해제
+        // 세션/쿠키 기반이면 ↓ 주석 해제 (그리고 서버 CORS/credentials 설정 필수)
         // credentials: "include",
         body: JSON.stringify({ email, password: pw }),
       });
 
+      const j = await r.json().catch(() => ({} as any));
+
       if (!r.ok) {
-        // 백엔드가 에러 메시지를 JSON으로 내려주면 표시
-        const j = await r.json().catch(() => ({}));
-        setErr(j?.message || `로그인 실패 (HTTP ${r.status})`);
+        const msg =
+          j?.message ||
+          j?.detail ||
+          (Array.isArray(j?.non_field_errors) && j.non_field_errors[0]) ||
+          `로그인 실패 (HTTP ${r.status})`;
+        setErr(msg);
         setLoading(false);
         return;
       }
 
-      // 성공 처리
+      // JWT 토큰 내려주는 백엔드라면 저장 (키 이름에 맞춰서)
+      const access = j?.access || j?.token;
+      if (access) localStorage.setItem("access_token", access);
+
       router.replace(next);
-    } catch (e) {
+    } catch {
       setErr("네트워크 오류");
+    } finally {
       setLoading(false);
     }
   };

@@ -37,6 +37,9 @@ if (!API_URL) {
 
 /** 5) 엔드포인트 */
 export const ENDPOINTS = {
+  login: `${API_URL}/api/user/login/`,
+    signup: `${API_URL}/api/user/signup/`,
+
   meetings: {
     list: `${API_URL}/api/meetings/`,
     create: `${API_URL}/api/meetings/`,

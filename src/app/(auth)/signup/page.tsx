@@ -2,13 +2,33 @@
 "use client";
 
 import { useRouter } from "next/navigation";
-import { useState } from "react";
+import { useState, useMemo } from "react";
 import { ENDPOINTS } from "@/lib/endpoints";
+
+type MaybeError = {
+  message?: string;
+  detail?: string;
+  errors?: Record<string, string[]>;
+  non_field_errors?: string[];
+};
+
+function pickErrorMessage(j: any & MaybeError, fallback: string) {
+  // 다양한 백엔드 에러 포맷을 최대한 커버
+  if (j?.message) return j.message;
+  if (j?.detail) return j.detail;
+  if (Array.isArray(j?.non_field_errors) && j.non_field_errors[0]) return j.non_field_errors[0];
+  if (j?.errors) {
+    const firstKey = Object.keys(j.errors)[0];
+    if (firstKey && Array.isArray(j.errors[firstKey]) && j.errors[firstKey][0]) {
+      return `${firstKey}: ${j.errors[firstKey][0]}`;
+    }
+  }
+  return fallback;
+}
 
 export default function SignupPage() {
   const router = useRouter();
 
-  // 상태값
   const [name, setName] = useState("");
   const [nickname, setNickname] = useState("");
   const [email, setEmail] = useState("");
@@ -17,6 +37,11 @@ export default function SignupPage() {
 
   const [loading, setLoading] = useState(false);
   const [err, setErr] = useState("");
+
+  // 최소 유효성 검사 (클라이언트)
+  const emailValid = useMemo(() => /\S+@\S+\.\S+/.test(email), [email]);
+  const pwStrong = useMemo(() => pw.length >= 6, [pw]);
+  const canSubmit = emailValid && pwStrong && pw === pw2 && !!name && !!nickname && !loading;
 
   const submit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -29,29 +54,45 @@ export default function SignupPage() {
 
     setLoading(true);
     try {
+      // 다양한 백엔드 호환을 위해 몇 개 필드를 함께 전송
+      // - password_confirm: 일부 서버 필수
+      // - username: Django류에서 username 필드가 필요한 경우 nickname으로 대체
+      // - name/full_name: 네가 쓰는 'name' 그대로 + 보조 키도 같이 보냄
+      const payload = {
+        name,
+        full_name: name,
+        nickname,
+        username: nickname,
+        email,
+        password: pw,
+        password_confirm: pw2,
+      };
+
       const r = await fetch(ENDPOINTS.auth.signup, {
         method: "POST",
         headers: { "content-type": "application/json" },
-        // 세션/쿠키 인증이라면 아래 주석 해제
+        // 세션/쿠키 인증이라면 ↓ 주석 해제 + 서버 CORS 설정 필요
         // credentials: "include",
-        body: JSON.stringify({
-          name,
-          nickname,
-          email,
-          password: pw,
-        }),
+        body: JSON.stringify(payload),
       });
 
+      const j = await r.json().catch(() => ({} as any));
+
       if (!r.ok) {
-        const j = await r.json().catch(() => ({}));
-        setErr(j?.message || `회원가입 실패 (HTTP ${r.status})`);
-        setLoading(false);
+        const msg = pickErrorMessage(j, `회원가입 실패 (HTTP ${r.status})`);
+        setErr(msg);
         return;
       }
 
-      router.replace("/login"); // 가입 후 로그인 페이지로 이동
+      // 서버가 바로 토큰을 내려주는 경우 저장 (키 이름에 맞춰서)
+      const access = j?.access || j?.token;
+      if (access) localStorage.setItem("access_token", access);
+
+      // 일반적으로는 가입 후 로그인 페이지로
+      router.replace("/login");
     } catch {
       setErr("네트워크 오류");
+    } finally {
       setLoading(false);
     }
   };
@@ -91,7 +132,7 @@ export default function SignupPage() {
           <input
             type="password"
             className="w-full rounded-md border px-3 py-2 outline-none focus:ring-2 focus:ring-blue-400"
-            placeholder="비밀번호"
+            placeholder="비밀번호 (6자 이상)"
             value={pw}
             onChange={(e) => setPw(e.target.value)}
             required
@@ -116,7 +157,7 @@ export default function SignupPage() {
 
           <button
             type="submit"
-            disabled={loading}
+            disabled={!canSubmit}
             className="w-full rounded-md bg-blue-600 py-2 text-white hover:bg-blue-700 disabled:opacity-50"
           >
             {loading ? "처리 중..." : "가입 완료"}
