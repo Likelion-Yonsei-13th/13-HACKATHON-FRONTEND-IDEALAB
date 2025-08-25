@@ -2,6 +2,7 @@
 "use client";
 
 import React, { useEffect, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { useEditor, EditorContent, Editor as TiptapEditor } from "@tiptap/react";
 import StarterKit from "@tiptap/starter-kit";
 import Placeholder from "@tiptap/extension-placeholder";
@@ -22,8 +23,8 @@ import { useUIStore } from "@/store/ui";
 import { useInsightStore } from "@/store/insight";
 import { ENDPOINTS } from "@/lib/endpoints";
 
-/* -------------------- 유틸 -------------------- */
-function throttle<T extends (...args: unknown[]) => void>(fn: T, ms: number) {
+/* ---------- 작은 유틸 ---------- */
+function throttle<T extends (...a: unknown[]) => void>(fn: T, ms: number) {
   let last = 0;
   let tid: ReturnType<typeof setTimeout> | null = null;
   return (...args: Parameters<T>) => {
@@ -42,7 +43,6 @@ function throttle<T extends (...args: unknown[]) => void>(fn: T, ms: number) {
     }
   };
 }
-
 function debounce<F extends (...args: any[]) => void>(fn: F, wait: number) {
   let t: ReturnType<typeof setTimeout> | null = null;
   let lastArgs: Parameters<F> | null = null;
@@ -68,26 +68,27 @@ function debounce<F extends (...args: any[]) => void>(fn: F, wait: number) {
   };
   return wrapped as F & { flush: () => void };
 }
-
 function esc(s: string) {
-  return s
-    .replaceAll("&", "&amp;")
-    .replaceAll("<", "&lt;")
-    .replaceAll(">", "&gt;")
-    .replaceAll('"', "&quot;");
+  return s.replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;").replaceAll('"', "&quot;");
 }
 
-/* -------------------- Props -------------------- */
+/* ---------- Body 포털 ---------- */
+function BodyPortal({ children }: { children: React.ReactNode }) {
+  if (typeof window === "undefined") return null;
+  return createPortal(children, document.body);
+}
+
+/* ---------- Props ---------- */
 export type EditorProps = {
   docId: string;
   initialHTML?: string;
   toolbarOffset?: number;
   toolbarTheme?: "light" | "dark";
-  meetingId?: string | number; // ✅ 녹음용 회의 ID (없으면 docId 사용)
-  persist?: boolean;           // (optional) 외부에서 쓰는 경우 대비
+  meetingId?: string | number; // 없으면 docId 사용
+  persist?: boolean;
 };
 
-/* -------------------- 메인 Editor -------------------- */
+/* ==================== 메인 Editor ==================== */
 export default function Editor({
   docId,
   initialHTML,
@@ -95,18 +96,16 @@ export default function Editor({
   toolbarTheme = "light",
   meetingId,
 }: EditorProps) {
-  // RightTab/Insight 연동
   const setRegion = useInsightStore((s) => s.setRegion);
-  // 우측 패널 열기 액션 (프로젝트 스토어 네이밍 다양성 대비)
   const openRightFromStore =
     useUIStore((s: any) => s.openRightPanel || s.setRightOpen || s.openRight || null);
 
-  // TipTap
   const editor = useEditor({
     extensions: [
       StarterKit.configure({
         bulletList: { keepMarks: true },
         orderedList: { keepMarks: true },
+        // Link/Underline은 StarterKit에 기본 포함 아님(중복 경고 뜨면 여기서 끄기)
       }),
       Placeholder.configure({
         placeholder: "여기에 자유롭게 작성하세요…",
@@ -123,65 +122,65 @@ export default function Editor({
       TableRow,
       TableHeader,
       TableCell,
-      RegionMark, // ✅ 지역 자동 하이라이트/클릭
+      RegionMark,
     ],
     content: initialHTML ?? `<h1>새 문서</h1><p>여기에 자유롭게 작성해 보세요.</p>`,
     autofocus: "end",
     immediatelyRender: false,
     editorProps: {
-      attributes: {
-        class:
-          // tiptap 클래스 반드시 포함 (region 스타일 적용)
-          "tiptap prose prose-neutral max-w-none focus:outline-none min-h-[70dvh] px-0 py-0",
-      },
+      attributes: { class: "tiptap prose prose-neutral max-w-none focus:outline-none min-h-[70dvh] px-0 py-0" },
     },
   });
 
-  /* window 브리지: RegionMark 클릭 → 전역 store + 패널 열기 + 커스텀 이벤트 */
+  /* RegionMark → 우측패널 연동 */
   useEffect(() => {
     (window as any).__setRegion = (name: string) => {
       try {
         setRegion(name);
         if (typeof openRightFromStore === "function") {
-          try {
-            openRightFromStore({ source: "region", region: name });
-          } catch {
-            openRightFromStore(true);
-          }
+          try { openRightFromStore({ source: "region", region: name }); } catch { openRightFromStore(true); }
         }
         window.dispatchEvent(new CustomEvent("insight:region", { detail: name }));
       } catch {}
     };
-    return () => {
-      delete (window as any).__setRegion;
-    };
+    return () => { delete (window as any).__setRegion; };
   }, [setRegion, openRightFromStore]);
 
-  /* -------- 자동 저장 -------- */
+  /* ---------- 자동 저장 ---------- */
   const saveCtrlRef = useRef<AbortController | null>(null);
-  const saveToServer = useMemo(
-    () =>
-      debounce(async (html: string) => {
-        try {
-          if (saveCtrlRef.current) saveCtrlRef.current.abort();
-          const ctrl = new AbortController();
-          saveCtrlRef.current = ctrl;
-
-          // ✅ endpoints.ts 사용
-          const url = ENDPOINTS.docs.update(docId);
-          await fetch(url, {
-            method: "PUT",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ html }),
-            signal: ctrl.signal,
-          });
-        } catch (e: unknown) {
-          if ((e as any)?.name === "AbortError") return;
-          console.warn("자동 저장 실패", e);
+// 1) 저장 호출 대상 교체 + 유효하지 않은 id면 저장 스킵
+const saveToServer = useMemo(
+  () =>
+    debounce(async (html: string) => {
+      try {
+        // docId 유효성(숫자 또는 UUID-ish) 검사
+        const id = String(docId);
+        if (!/^\d+$|^[a-f0-9-]{8,}$/i.test(id)) {
+          console.warn("[autosave] skip: invalid block id:", id);
+          return;
         }
-      }, 800),
-    [docId]
-  );
+
+        if (saveCtrlRef.current) saveCtrlRef.current.abort();
+        const ctrl = new AbortController();
+        saveCtrlRef.current = ctrl;
+
+        const url = ENDPOINTS.blocks.update(id);
+        // 서버가 PATCH를 기대할 확률이 큼
+        await fetch(url, {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          // credentials: "include", // 세션이 꼭 필요하면 이거 켜고 CORS 설정 맞추기
+          body: JSON.stringify({ html }),
+          signal: ctrl.signal,
+        });
+      } catch (e: any) {
+        if (e?.name === "AbortError") return;
+        console.warn("자동 저장 실패", e);
+      }
+    }, 800),
+  [docId]
+);
+
 
   useEffect(() => {
     if (!editor) return;
@@ -193,40 +192,36 @@ export default function Editor({
     }, 120);
     editor.on("update", onUpdate);
     return () => {
-      try {
-        (saveToServer as any).flush?.();
-      } catch {}
+      try { (saveToServer as any).flush?.(); } catch {}
     };
   }, [editor, saveToServer]);
 
-  /* -------- 녹음 패널 & 사이드바 -------- */
+  /* ---------- 녹음 패널 ---------- */
   const [recOpen, setRecOpen] = useState(false);
   const setCollapsed = useUIStore((s) =>
     (s as any).setCollapsed?.bind?.(null, undefined) ? (s as any).setCollapsed : () => {}
   );
 
-  const handleOpenRecorder = () => {
+  // 버튼 클릭 컨텍스트에서 권한 먼저 확보 -> not-allowed 방지
+  const handleOpenRecorder = async () => {
     try {
-      setCollapsed(true as any);
-    } catch {}
+      const tmp = await navigator.mediaDevices.getUserMedia({ audio: true });
+      tmp.getTracks().forEach((t) => t.stop());
+    } catch {
+      alert("마이크 권한을 허용해 주세요 (주소창 왼쪽 자물쇠 아이콘 → 마이크: 허용).");
+      return;
+    }
+    try { setCollapsed(true as any); } catch {}
     setRecOpen(true);
   };
   const handleCloseRecorder = () => {
-    try {
-      setCollapsed(false as any);
-    } catch {}
+    try { setCollapsed(false as any); } catch {}
     setRecOpen(false);
   };
 
-  if (!editor) {
-    return (
-      <div className="min-h-[70dvh] px-8 py-8 animate-pulse text-neutral-300">
-        에디터 로딩 중…
-      </div>
-    );
-  }
+  if (!editor) return <div className="min-h-[70dvh] px-8 py-8 animate-pulse text-neutral-300">에디터 로딩 중…</div>;
 
-  const effectiveMeetingId = meetingId ?? docId; // ✅ meetingId 없으면 docId 사용
+  const effectiveMeetingId = meetingId ?? docId;
 
   return (
     <div className="w-full">
@@ -243,7 +238,7 @@ export default function Editor({
       <div className="mx-auto w-full px-8 py-8">
         {recOpen ? (
           <RecorderPanel
-            meetingId={effectiveMeetingId}   // ✅ 여기!
+            meetingId={effectiveMeetingId}
             onClose={handleCloseRecorder}
             onFinish={(p) => {
               const html = `
@@ -251,33 +246,21 @@ export default function Editor({
                   <audio controls src="${p.audioUrl}"></audio>
                   <div class="ai-summary">
                     <p><strong>요약</strong></p>
-                    <ul>${p.summary
-                      .split(/\n+/)
-                      .map((s) => `<li>${s}</li>`)
-                      .join("")}</ul>
+                    <ul>${p.summary.split(/\n+/).map((s) => `<li>${s}</li>`).join("")}</ul>
                   </div>
                   <details><summary>전체 스크립트</summary>
                     <pre style="white-space:pre-wrap">${esc(p.transcript)}</pre>
                   </details>
                 </div>`;
               editor.commands.insertContent(html);
-              try {
-                (saveToServer as any).flush?.();
-              } catch {}
+              try { (saveToServer as any).flush?.(); } catch {}
             }}
           />
         ) : (
           <>
-            {/* 지역 마크 전역 스타일 */}
             <style jsx global>{`
-              .tiptap span[data-region] {
-                font-weight: 700;
-                color: #0472de;
-                cursor: pointer;
-              }
-              .tiptap span[data-region]:hover {
-                text-decoration: underline;
-              }
+              .tiptap span[data-region] { font-weight: 700; color: #0472de; cursor: pointer; }
+              .tiptap span[data-region]:hover { text-decoration: underline; }
             `}</style>
             <EditorContent editor={editor} />
           </>
@@ -287,7 +270,7 @@ export default function Editor({
   );
 }
 
-/* -------------------- Toolbar -------------------- */
+/* ==================== Toolbar ==================== */
 function Toolbar({
   editor,
   theme = "light",
@@ -314,42 +297,30 @@ function Toolbar({
       : "bg-white text-neutral-900 border-neutral-200 shadow";
   const btnBase =
     "h-9 rounded-md px-2 text-sm inline-flex items-center justify-center gap-1 border transition active:scale-[.98]";
-  const btnTone =
-    theme === "dark"
-      ? "border-neutral-800 hover:bg-neutral-800/70"
-      : "border-neutral-200 hover:bg-neutral-50";
+  const btnTone = theme === "dark" ? "border-neutral-800 hover:bg-neutral-800/70" : "border-neutral-200 hover:bg-neutral-50";
   const activeTone = theme === "dark" ? "bg-neutral-800" : "bg-neutral-100";
   const iconBtnBase =
     "h-9 w-9 rounded-md inline-flex items-center justify-center border transition active:scale-[.98] " +
     (theme === "dark" ? "border-neutral-800 hover:bg-neutral-800/70" : "border-neutral-200 hover:bg-neutral-50");
   const iconClass = "h-8 w-8";
 
-  const TextBtn: React.FC<{
-    title: string;
-    active?: boolean;
-    disabled?: boolean;
-    onClick: () => void;
-  }> = ({ title, active = false, disabled = false, onClick, children }) => (
+  const TextBtn: React.FC<{ title: string; active?: boolean; disabled?: boolean; onClick: () => void; }> = ({
+    title, active = false, disabled = false, onClick, children,
+  }) => (
     <button
       type="button"
       title={title}
       disabled={disabled}
       onClick={onClick}
-      className={[btnBase, btnTone, active ? activeTone : "", disabled ? "opacity-40 cursor-not-allowed" : ""].join(
-        " "
-      )}
+      className={[btnBase, btnTone, active ? activeTone : "", disabled ? "opacity-40 cursor-not-allowed" : ""].join(" ")}
     >
       {children}
     </button>
   );
 
-  const IconBtn: React.FC<{
-    title: string;
-    src: string;
-    active?: boolean;
-    onClick: () => void;
-    disabled?: boolean;
-  }> = ({ title, src, active = false, onClick, disabled = false }) => (
+  const IconBtn: React.FC<{ title: string; src: string; active?: boolean; onClick: () => void; disabled?: boolean; }> = ({
+    title, src, active = false, onClick, disabled = false,
+  }) => (
     <button
       type="button"
       title={title}
@@ -362,31 +333,17 @@ function Toolbar({
     </button>
   );
 
-  const Sep = () => (
-    <span className={theme === "dark" ? "mx-1 h-5 w-px bg-neutral-800" : "mx-1 h-5 w-px bg-neutral-200"} />
-  );
+  const Sep = () => <span className={theme === "dark" ? "mx-1 h-5 w-px bg-neutral-800" : "mx-1 h-5 w-px bg-neutral-200"} />;
 
   const setBlock = (type: string) => {
     const c = editor.chain().focus();
     switch (type) {
-      case "p":
-        c.setParagraph().run();
-        break;
-      case "h1":
-        c.toggleHeading({ level: 1 }).run();
-        break;
-      case "h2":
-        c.toggleHeading({ level: 2 }).run();
-        break;
-      case "h3":
-        c.toggleHeading({ level: 3 }).run();
-        break;
-      case "quote":
-        c.toggleBlockquote().run();
-        break;
-      case "code":
-        c.toggleCodeBlock().run();
-        break;
+      case "p": c.setParagraph().run(); break;
+      case "h1": c.toggleHeading({ level: 1 }).run(); break;
+      case "h2": c.toggleHeading({ level: 2 }).run(); break;
+      case "h3": c.toggleHeading({ level: 3 }).run(); break;
+      case "quote": c.toggleBlockquote().run(); break;
+      case "code": c.toggleCodeBlock().run(); break;
     }
   };
 
@@ -462,22 +419,14 @@ function Toolbar({
         <select
           className={[
             "h-9 rounded-md border px-2 text-sm",
-            theme === "dark"
-              ? "bg-neutral-900 border-neutral-800 text-neutral-100"
-              : "bg-white border-neutral-200 text-neutral-900",
+            theme === "dark" ? "bg-neutral-900 border-neutral-800 text-neutral-100" : "bg-white border-neutral-200 text-neutral-900",
           ].join(" ")}
           value={
-            editor.isActive("heading", { level: 1 })
-              ? "h1"
-              : editor.isActive("heading", { level: 2 })
-              ? "h2"
-              : editor.isActive("heading", { level: 3 })
-              ? "h3"
-              : editor.isActive("blockquote")
-              ? "quote"
-              : editor.isActive("codeBlock")
-              ? "code"
-              : "p"
+            editor.isActive("heading", { level: 1 }) ? "h1"
+            : editor.isActive("heading", { level: 2 }) ? "h2"
+            : editor.isActive("heading", { level: 3 }) ? "h3"
+            : editor.isActive("blockquote") ? "quote"
+            : editor.isActive("codeBlock") ? "code" : "p"
           }
           onChange={(e) => setBlock(e.target.value)}
           title="블록 타입"
@@ -493,76 +442,26 @@ function Toolbar({
         <Sep />
 
         {/* 텍스트 */}
-        <TextBtn title="굵게" active={editor.isActive("bold")} onClick={() => editor.chain().focus().toggleBold().run()}>
-          <b>B</b>
-        </TextBtn>
-        <TextBtn
-          title="기울임"
-          active={editor.isActive("italic")}
-          onClick={() => editor.chain().focus().toggleItalic().run()}
-        >
-          <i>I</i>
-        </TextBtn>
-        <TextBtn
-          title="밑줄"
-          active={editor.isActive("underline")}
-          onClick={() => editor.chain().focus().toggleUnderline().run()}
-        >
-          <u>U</u>
-        </TextBtn>
-        <TextBtn
-          title="취소선"
-          active={editor.isActive("strike")}
-          onClick={() => editor.chain().focus().toggleStrike().run()}
-        >
+        <TextBtn title="굵게"   active={editor.isActive("bold")}      onClick={() => editor.chain().focus().toggleBold().run()}><b>B</b></TextBtn>
+        <TextBtn title="기울임" active={editor.isActive("italic")}    onClick={() => editor.chain().focus().toggleItalic().run()}><i>I</i></TextBtn>
+        <TextBtn title="밑줄"   active={editor.isActive("underline")} onClick={() => editor.chain().focus().toggleUnderline().run()}><u>U</u></TextBtn>
+        <TextBtn title="취소선" active={editor.isActive("strike")}    onClick={() => editor.chain().focus().toggleStrike().run()}>
           <span className="line-through">S</span>
         </TextBtn>
 
         <Sep />
 
         {/* 정렬 */}
-        <IconBtn
-          title="왼쪽 정렬"
-          src="/icons/좌측.png"
-          active={editor.isActive({ textAlign: "left" })}
-          onClick={() => editor.chain().focus().setTextAlign("left").run()}
-        />
-        <IconBtn
-          title="가운데 정렬"
-          src="/icons/가운데.png"
-          active={editor.isActive({ textAlign: "center" })}
-          onClick={() => editor.chain().focus().setTextAlign("center").run()}
-        />
-        <IconBtn
-          title="오른쪽 정렬"
-          src="/icons/우측.png"
-          active={editor.isActive({ textAlign: "right" })}
-          onClick={() => editor.chain().focus().setTextAlign("right").run()}
-        />
+        <IconBtn title="왼쪽 정렬"   src="/icons/좌측.png"   active={editor.isActive({ textAlign: "left" })}   onClick={() => editor.chain().focus().setTextAlign("left").run()} />
+        <IconBtn title="가운데 정렬" src="/icons/가운데.png" active={editor.isActive({ textAlign: "center" })} onClick={() => editor.chain().focus().setTextAlign("center").run()} />
+        <IconBtn title="오른쪽 정렬" src="/icons/우측.png"   active={editor.isActive({ textAlign: "right" })}  onClick={() => editor.chain().focus().setTextAlign("right").run()} />
 
         <Sep />
 
         {/* 목록 */}
-        <IconBtn
-          title="글머리 기호"
-          src="/icons/글머리 기호.png"
-          active={editor.isActive("bulletList")}
-          onClick={() => editor.chain().focus().toggleBulletList().run()}
-        />
-        <TextBtn
-          title="번호 목록"
-          active={editor.isActive("orderedList")}
-          onClick={() => editor.chain().focus().toggleOrderedList().run()}
-        >
-          1.
-        </TextBtn>
-        <TextBtn
-          title="할 일 목록"
-          active={editor.isActive("taskList")}
-          onClick={() => editor.chain().focus().toggleTaskList().run()}
-        >
-          ☑
-        </TextBtn>
+        <IconBtn title="글머리 기호" src="/icons/글머리 기호.png" active={editor.isActive("bulletList")} onClick={() => editor.chain().focus().toggleBulletList().run()} />
+        <TextBtn title="번호 목록" active={editor.isActive("orderedList")} onClick={() => editor.chain().focus().toggleOrderedList().run()}>1.</TextBtn>
+        <TextBtn title="할 일 목록" active={editor.isActive("taskList")} onClick={() => editor.chain().focus().toggleTaskList().run()}>☑</TextBtn>
 
         <Sep />
 
@@ -579,99 +478,79 @@ function Toolbar({
         <div className="ml-auto" />
 
         {/* 되돌리기/다시 실행 */}
-        <TextBtn title="되돌리기" onClick={() => editor.chain().focus().undo().run()}>
-          ↶
-        </TextBtn>
-        <TextBtn title="다시 실행" onClick={() => editor.chain().focus().redo().run()}>
-          ↷
-        </TextBtn>
+        <TextBtn title="되돌리기" onClick={() => editor.chain().focus().undo().run()}>↶</TextBtn>
+        <TextBtn title="다시 실행" onClick={() => editor.chain().focus().redo().run()}>↷</TextBtn>
       </div>
 
       {/* 표 전용 툴바 */}
       {tableBarOpen && editor.isActive("table") && (
         <div className={["mt-2 rounded-xl border px-3 py-2 flex flex-wrap items-center gap-2", tone].join(" ")}>
           <span className="text-sm opacity-60 mr-1">표 편집</span>
-          <TextBtn title="행↑+" onClick={() => editor.chain().focus().addRowBefore().run()}>
-            행↑+
-          </TextBtn>
-          <TextBtn title="행↓+" onClick={() => editor.chain().focus().addRowAfter().run()}>
-            행↓+
-          </TextBtn>
-          <TextBtn title="행−" onClick={() => editor.chain().focus().deleteRow().run()}>
-            행−
-          </TextBtn>
+          <TextBtn title="행↑+" onClick={() => editor.chain().focus().addRowBefore().run()}>행↑+</TextBtn>
+          <TextBtn title="행↓+" onClick={() => editor.chain().focus().addRowAfter().run()}>행↓+</TextBtn>
+          <TextBtn title="행−"  onClick={() => editor.chain().focus().deleteRow().run()}>행−</TextBtn>
           <Sep />
-          <TextBtn title="열←+" onClick={() => editor.chain().focus().addColumnBefore().run()}>
-            열←+
-          </TextBtn>
-          <TextBtn title="열→+" onClick={() => editor.chain().focus().addColumnAfter().run()}>
-            열→+
-          </TextBtn>
-          <TextBtn title="열−" onClick={() => editor.chain().focus().deleteColumn().run()}>
-            열−
-          </TextBtn>
+          <TextBtn title="열←+" onClick={() => editor.chain().focus().addColumnBefore().run()}>열←+</TextBtn>
+          <TextBtn title="열→+" onClick={() => editor.chain().focus().addColumnAfter().run()}>열→+</TextBtn>
+          <TextBtn title="열−"  onClick={() => editor.chain().focus().deleteColumn().run()}>열−</TextBtn>
           <Sep />
-          <TextBtn title="헤더" onClick={() => editor.chain().focus().toggleHeaderRow().run()}>
-            헤더
-          </TextBtn>
-          <TextBtn title="표 삭제" onClick={() => editor.chain().focus().deleteTable().run()}>
-            표 삭제
-          </TextBtn>
+          <TextBtn title="헤더" onClick={() => editor.chain().focus().toggleHeaderRow().run()}>헤더</TextBtn>
+          <TextBtn title="표 삭제" onClick={() => editor.chain().focus().deleteTable().run()}>표 삭제</TextBtn>
         </div>
       )}
 
-      {/* 표 만들기 모달 */}
+      {/* 표 만들기 모달 - Body 포털로 렌더 */}
       {showTableModal && (
-        <div className="fixed inset-0 z-[60] bg-black/30 flex items-center justify-center">
+        <BodyPortal>
           <div
-            className={`rounded-xl border bg-white p-5 w-[320px] ${
-              theme === "dark" ? "text-neutral-100 bg-neutral-900 border-neutral-800" : ""
-            }`}
+            className="fixed inset-0 z-[10000] bg-black/40 backdrop-blur-[2px] flex items-center justify-center"
+            onClick={(e) => { if (e.target === e.currentTarget) setShowTableModal(false); }}
           >
-            <h3 className="text-lg font-semibold">표 만들기</h3>
-            <div className="mt-4 space-y-3">
-              <label className="flex items-center justify-between">
-                <span>행 개수</span>
-                <input
-                  type="number"
-                  min={1}
-                  value={rows}
-                  onChange={(e) => setRows(Math.max(1, Number(e.target.value) || 1))}
-                  className="w-24 rounded-md border px-2 py-1"
-                />
-              </label>
-              <label className="flex items-center justify-between">
-                <span>열 개수</span>
-                <input
-                  type="number"
-                  min={1}
-                  value={cols}
-                  onChange={(e) => setCols(Math.max(1, Number(e.target.value) || 1))}
-                  className="w-24 rounded-md border px-2 py-1"
-                />
-              </label>
-              <label className="flex items-center gap-2 text-sm opacity-70">
-                <input type="checkbox" checked readOnly />
-                헤더 행 포함 (기본)
-              </label>
-            </div>
-            <div className="mt-5 flex justify-end gap-2">
-              <button onClick={() => setShowTableModal(false)} className="h-9 px-3 rounded-md border">
-                취소
-              </button>
-              <button
-                onClick={() => {
-                  editor.chain().focus().insertTable({ rows, cols, withHeaderRow: true }).run();
-                  setShowTableModal(false);
-                  setTableBarOpen(true);
-                }}
-                className="h-9 px-3 rounded-md border bg-blue-600 text-white hover:bg-blue-700"
-              >
-                확인
-              </button>
+            <div
+              className={`rounded-xl border w-[360px] max-w-[90vw] bg-white p-5 shadow-2xl ${
+                theme === "dark" ? "text-neutral-100 bg-neutral-900 border-neutral-800" : ""
+              }`}
+              role="dialog"
+              aria-modal="true"
+            >
+              <h3 className="text-lg font-semibold">표 만들기</h3>
+              <div className="mt-4 space-y-3">
+                <label className="flex items-center justify-between">
+                  <span>행 개수</span>
+                  <input
+                    type="number" min={1} value={rows}
+                    onChange={(e) => setRows(Math.max(1, Number(e.target.value) || 1))}
+                    className="w-24 rounded-md border px-2 py-1"
+                  />
+                </label>
+                <label className="flex items-center justify-between">
+                  <span>열 개수</span>
+                  <input
+                    type="number" min={1} value={cols}
+                    onChange={(e) => setCols(Math.max(1, Number(e.target.value) || 1))}
+                    className="w-24 rounded-md border px-2 py-1"
+                  />
+                </label>
+                <label className="flex items-center gap-2 text-sm opacity-70 select-none">
+                  <input type="checkbox" checked readOnly />
+                  헤더 행 포함 (기본)
+                </label>
+              </div>
+              <div className="mt-5 flex justify-end gap-2">
+                <button onClick={() => setShowTableModal(false)} className="h-9 px-3 rounded-md border">취소</button>
+                <button
+                  onClick={() => {
+                    editor.chain().focus().insertTable({ rows, cols, withHeaderRow: true }).run();
+                    setShowTableModal(false);
+                  }}
+                  className="h-9 px-3 rounded-md border bg-blue-600 text-white hover:bg-blue-700"
+                >
+                  확인
+                </button>
+              </div>
             </div>
           </div>
-        </div>
+        </BodyPortal>
       )}
     </>
   );
