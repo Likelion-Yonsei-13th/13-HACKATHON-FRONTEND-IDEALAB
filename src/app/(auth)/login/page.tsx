@@ -21,7 +21,7 @@ function LoginForm() {
     setErr("");
 
     try {
-      const r = await fetch(ENDPOINTS.auth.login, {
+      const r = await fetch(ENDPOINTS.login, {
         method: "POST",
         headers: { "content-type": "application/json" },
         // 세션/쿠키 기반이면 ↓ 주석 해제 (그리고 서버 CORS/credentials 설정 필수)

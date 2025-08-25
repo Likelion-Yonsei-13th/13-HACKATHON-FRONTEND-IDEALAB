@@ -68,7 +68,7 @@ export default function SignupPage() {
         password_confirm: pw2,
       };
 
-      const r = await fetch(ENDPOINTS.auth.signup, {
+      const r = await fetch(ENDPOINTS.signup, {
         method: "POST",
         headers: { "content-type": "application/json" },
         // 세션/쿠키 인증이라면 ↓ 주석 해제 + 서버 CORS 설정 필요
