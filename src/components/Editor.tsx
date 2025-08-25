@@ -23,8 +23,8 @@ import { useUIStore } from "@/store/ui";
 import { useInsightStore } from "@/store/insight";
 import { ENDPOINTS } from "@/lib/endpoints";
 
-/* ---------- 작은 유틸 ---------- */
-function throttle<T extends (...a: unknown[]) => void>(fn: T, ms: number) {
+/* -------------------- 유틸 -------------------- */
+function throttle<T extends (...args: unknown[]) => void>(fn: T, ms: number) {
   let last = 0;
   let tid: ReturnType<typeof setTimeout> | null = null;
   return (...args: Parameters<T>) => {
@@ -43,6 +43,7 @@ function throttle<T extends (...a: unknown[]) => void>(fn: T, ms: number) {
     }
   };
 }
+
 function debounce<F extends (...args: any[]) => void>(fn: F, wait: number) {
   let t: ReturnType<typeof setTimeout> | null = null;
   let lastArgs: Parameters<F> | null = null;
@@ -68,23 +69,127 @@ function debounce<F extends (...args: any[]) => void>(fn: F, wait: number) {
   };
   return wrapped as F & { flush: () => void };
 }
+
 function esc(s: string) {
   return s.replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;").replaceAll('"', "&quot;");
 }
 
-/* ---------- Body 포털 ---------- */
+/* -------------------- Body Portal -------------------- */
 function BodyPortal({ children }: { children: React.ReactNode }) {
   if (typeof window === "undefined") return null;
   return createPortal(children, document.body);
 }
 
-/* ---------- Props ---------- */
+/* -------------------- API 래퍼 -------------------- */
+/** 블록 생성 (백이 요구하는 필드 포맷: meeting, parent_block, order_no, type, level, text) */
+async function apiCreateBlock(params: {
+  meeting: number;
+  text: string;
+  parent_block?: number | null;
+  order_no?: number;
+  type?: string;
+  level?: number;
+}) {
+  const body = {
+    meeting: params.meeting,
+    parent_block: params.parent_block ?? null,
+    order_no: params.order_no ?? 1,
+    type: params.type ?? "paragraph",
+    level: params.level ?? 0,
+    text: params.text,
+  };
+
+  const res = await fetch(ENDPOINTS.blocks.create, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+
+  const txt = await res.text().catch(() => "");
+  let data: any = {};
+  try {
+    data = txt ? JSON.parse(txt) : {};
+  } catch {
+    /* ignore */
+  }
+
+  if (!res.ok) {
+    const err: any = new Error(`create ${res.status}`);
+    err.status = res.status;
+    err.body = txt;
+    throw err;
+  }
+
+  /** 응답 예시: { id, meeting, ..., version } */
+  return {
+    id: String(data.id ?? data.pk ?? data.block_id),
+    version: Number(data.version ?? 1),
+  };
+}
+
+/** 블록 상세 조회 → 현재 version 확보 */
+async function apiGetBlock(id: string) {
+  const res = await fetch(ENDPOINTS.blocks.detail(id), {
+    method: "GET",
+    headers: { "Content-Type": "application/json" },
+  });
+  const txt = await res.text().catch(() => "");
+  let data: any = {};
+  try {
+    data = txt ? JSON.parse(txt) : {};
+  } catch {}
+  if (!res.ok) {
+    const err: any = new Error(`get ${res.status}`);
+    err.status = res.status;
+    err.body = txt;
+    throw err;
+  }
+  return {
+    version: Number(data.version ?? 1),
+    text: String(data.text ?? ""),
+  };
+}
+
+/** 블록 수정 (낙관적 락) — 409 나오면 에러로 currentVersion 실어줌 */
+async function apiPatchBlock(id: string, text: string, version: number) {
+  const res = await fetch(ENDPOINTS.blocks.update(id), {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ text, version }),
+  });
+
+  const bodyText = await res.text().catch(() => "");
+  let data: any = {};
+  try {
+    data = bodyText ? JSON.parse(bodyText) : {};
+  } catch {}
+
+  if (!res.ok) {
+    const cur =
+      data?.detail?.current?.version ??
+      data?.current?.version ??
+      data?.version ??
+      null;
+    const err: any = new Error(`patch ${res.status}`);
+    err.status = res.status;
+    err.currentVersion = cur;
+    err.body = bodyText;
+    throw err;
+  }
+
+  const newVersion = Number(data.version ?? version + 1);
+  return { version: newVersion };
+}
+
+/* -------------------- Props -------------------- */
 export type EditorProps = {
-  docId: string;
+  /** 존재하는 블록 id(숫자)면 그 블록을 수정 / 아니라면 새 블록 생성해서 연결 */
+  docId: string | number;
   initialHTML?: string;
   toolbarOffset?: number;
   toolbarTheme?: "light" | "dark";
-  meetingId?: string | number; // 없으면 docId 사용
+  /** 서버 요구: 새 블록 만들 때 반드시 **숫자** meeting id 필요 */
+  meetingId?: string | number;
   persist?: boolean;
 };
 
@@ -100,12 +205,20 @@ export default function Editor({
   const openRightFromStore =
     useUIStore((s: any) => s.openRightPanel || s.setRightOpen || s.openRight || null);
 
+  /* 숫자 meeting id 파싱 */
+  const numericMeeting = useMemo(() => {
+    const m = meetingId;
+    if (typeof m === "number") return m;
+    if (typeof m === "string" && /^\d+$/.test(m)) return Number(m);
+    return null;
+  }, [meetingId]);
+
+  /* TipTap */
   const editor = useEditor({
     extensions: [
       StarterKit.configure({
         bulletList: { keepMarks: true },
         orderedList: { keepMarks: true },
-        // Link/Underline은 StarterKit에 기본 포함 아님(중복 경고 뜨면 여기서 끄기)
       }),
       Placeholder.configure({
         placeholder: "여기에 자유롭게 작성하세요…",
@@ -128,59 +241,133 @@ export default function Editor({
     autofocus: "end",
     immediatelyRender: false,
     editorProps: {
-      attributes: { class: "tiptap prose prose-neutral max-w-none focus:outline-none min-h-[70dvh] px-0 py-0" },
+      attributes: {
+        class: "tiptap prose prose-neutral max-w-none focus:outline-none min-h-[70dvh] px-0 py-0",
+      },
     },
   });
 
-  /* RegionMark → 우측패널 연동 */
+  /* RegionMark → 우측 패널 연동 */
   useEffect(() => {
     (window as any).__setRegion = (name: string) => {
       try {
         setRegion(name);
         if (typeof openRightFromStore === "function") {
-          try { openRightFromStore({ source: "region", region: name }); } catch { openRightFromStore(true); }
+          try {
+            openRightFromStore({ source: "region", region: name });
+          } catch {
+            openRightFromStore(true);
+          }
         }
         window.dispatchEvent(new CustomEvent("insight:region", { detail: name }));
       } catch {}
     };
-    return () => { delete (window as any).__setRegion; };
+    return () => {
+      delete (window as any).__setRegion;
+    };
   }, [setRegion, openRightFromStore]);
+
+  /* ---------- 블록 id / version 상태 ---------- */
+  const initialBlockId = useMemo(() => {
+    const s = String(docId);
+    return /^\d+$/.test(s) ? s : null; // 숫자면 기존 블록
+  }, [docId]);
+
+  const [blockId, setBlockId] = useState<string | null>(initialBlockId);
+  const [version, setVersion] = useState<number | null>(null);
+
+  /* 기존 블록이면 현재 버전 가져옴 */
+  useEffect(() => {
+    (async () => {
+      if (!blockId) return;
+      try {
+        const info = await apiGetBlock(blockId);
+        setVersion(info.version);
+      } catch (e) {
+        console.warn("[init] get block failed:", e);
+      }
+    })();
+  }, [blockId]);
+
+  /* ---------- 블록 보장 함수(없으면 생성) ---------- */
+  async function ensureBlockId(getHtml: () => string): Promise<{ id: string | null; ver: number | null }> {
+    if (blockId && version != null) return { id: blockId, ver: version };
+
+    // 새로 만들어야 할 경우 meeting id가 꼭 숫자여야 함
+    if (!numericMeeting) {
+      console.warn("[autosave] meetingId(숫자)가 없어서 새 블록을 만들 수 없음");
+      return { id: null, ver: null };
+    }
+    try {
+      const html = getHtml();
+      const created = await apiCreateBlock({
+        meeting: numericMeeting,
+        text: html,
+        parent_block: null,
+        order_no: 1,
+        type: "paragraph",
+        level: 0,
+      });
+      setBlockId(created.id);
+      setVersion(created.version);
+      return { id: created.id, ver: created.version };
+    } catch (e) {
+      console.warn("[create] block create failed:", e);
+      return { id: null, ver: null };
+    }
+  }
 
   /* ---------- 자동 저장 ---------- */
   const saveCtrlRef = useRef<AbortController | null>(null);
-// 1) 저장 호출 대상 교체 + 유효하지 않은 id면 저장 스킵
-const saveToServer = useMemo(
-  () =>
-    debounce(async (html: string) => {
-      try {
-        // docId 유효성(숫자 또는 UUID-ish) 검사
-        const id = String(docId);
-        if (!/^\d+$|^[a-f0-9-]{8,}$/i.test(id)) {
-          console.warn("[autosave] skip: invalid block id:", id);
-          return;
+
+  const saveToServer = useMemo(
+    () =>
+      debounce(async (html: string) => {
+        try {
+          const info = await ensureBlockId(() => html);
+          if (!info.id || info.ver == null) {
+            console.warn("[autosave] block id / version 확보 실패 → 스킵");
+            return;
+          }
+
+          if (saveCtrlRef.current) saveCtrlRef.current.abort();
+          const ctrl = new AbortController();
+          saveCtrlRef.current = ctrl;
+
+          // 1차 시도
+          try {
+            const r1 = await apiPatchBlock(info.id, html, info.ver);
+            setVersion(r1.version);
+            return;
+          } catch (e: any) {
+            // 409 버전 충돌 → 서버 최신버전으로 1회 재시도
+            if (e?.status === 409) {
+              const latest = Number(e.currentVersion ?? info.ver);
+              if (!Number.isNaN(latest)) {
+                try {
+                  const r2 = await apiPatchBlock(info.id, html, latest);
+                  setVersion(r2.version);
+                  return;
+                } catch (e2) {
+                  console.warn("자동저장 재시도 실패:", e2);
+                }
+              }
+            }
+            throw e;
+          }
+        } catch (e: any) {
+          // 실패 시 서버에서 최신 버전만 동기화 시도
+          try {
+            if (blockId) {
+              const fresh = await apiGetBlock(blockId);
+              setVersion(fresh.version);
+            }
+          } catch {}
+          console.warn("자동 저장 실패:", e);
         }
-
-        if (saveCtrlRef.current) saveCtrlRef.current.abort();
-        const ctrl = new AbortController();
-        saveCtrlRef.current = ctrl;
-
-        const url = ENDPOINTS.blocks.update(id);
-        // 서버가 PATCH를 기대할 확률이 큼
-        await fetch(url, {
-          method: "PATCH",
-          headers: { "Content-Type": "application/json" },
-          // credentials: "include", // 세션이 꼭 필요하면 이거 켜고 CORS 설정 맞추기
-          body: JSON.stringify({ html }),
-          signal: ctrl.signal,
-        });
-      } catch (e: any) {
-        if (e?.name === "AbortError") return;
-        console.warn("자동 저장 실패", e);
-      }
-    }, 800),
-  [docId]
-);
-
+      }, 800),
+    [blockId, version, numericMeeting]
+  );
 
   useEffect(() => {
     if (!editor) return;
@@ -192,7 +379,9 @@ const saveToServer = useMemo(
     }, 120);
     editor.on("update", onUpdate);
     return () => {
-      try { (saveToServer as any).flush?.(); } catch {}
+      try {
+        (saveToServer as any).flush?.();
+      } catch {}
     };
   }, [editor, saveToServer]);
 
@@ -202,7 +391,6 @@ const saveToServer = useMemo(
     (s as any).setCollapsed?.bind?.(null, undefined) ? (s as any).setCollapsed : () => {}
   );
 
-  // 버튼 클릭 컨텍스트에서 권한 먼저 확보 -> not-allowed 방지
   const handleOpenRecorder = async () => {
     try {
       const tmp = await navigator.mediaDevices.getUserMedia({ audio: true });
@@ -211,17 +399,29 @@ const saveToServer = useMemo(
       alert("마이크 권한을 허용해 주세요 (주소창 왼쪽 자물쇠 아이콘 → 마이크: 허용).");
       return;
     }
-    try { setCollapsed(true as any); } catch {}
+    try {
+      setCollapsed(true as any);
+    } catch {}
     setRecOpen(true);
   };
+
   const handleCloseRecorder = () => {
-    try { setCollapsed(false as any); } catch {}
+    try {
+      setCollapsed(false as any);
+    } catch {}
     setRecOpen(false);
   };
 
-  if (!editor) return <div className="min-h-[70dvh] px-8 py-8 animate-pulse text-neutral-300">에디터 로딩 중…</div>;
+  if (!editor) {
+    return (
+      <div className="min-h-[70dvh] px-8 py-8 animate-pulse text-neutral-300">
+        에디터 로딩 중…
+      </div>
+    );
+  }
 
-  const effectiveMeetingId = meetingId ?? docId;
+  /* 녹음 패널에서 사용할 meeting id — 숫자면 그걸, 아니면 블록 id */
+  const effectiveMeetingId = numericMeeting ?? (blockId ?? String(docId));
 
   return (
     <div className="w-full">
@@ -241,26 +441,33 @@ const saveToServer = useMemo(
             meetingId={effectiveMeetingId}
             onClose={handleCloseRecorder}
             onFinish={(p) => {
+              // ✅ 녹음 끝나면 "요약만" 문서에 남기기 (오디오/전체 스크립트 삭감)
               const html = `
-                <div class="ai-audio-note">
-                  <audio controls src="${p.audioUrl}"></audio>
-                  <div class="ai-summary">
-                    <p><strong>요약</strong></p>
-                    <ul>${p.summary.split(/\n+/).map((s) => `<li>${s}</li>`).join("")}</ul>
-                  </div>
-                  <details><summary>전체 스크립트</summary>
-                    <pre style="white-space:pre-wrap">${esc(p.transcript)}</pre>
-                  </details>
+                <div class="ai-summary">
+                  <p><strong>요약</strong></p>
+                  <ul>${p.summary
+                    .split(/\n+/)
+                    .map((line) => `<li>${esc(line)}</li>`)
+                    .join("")}</ul>
                 </div>`;
               editor.commands.insertContent(html);
-              try { (saveToServer as any).flush?.(); } catch {}
+              try {
+                (saveToServer as any).flush?.();
+              } catch {}
             }}
           />
         ) : (
           <>
+            {/* 지역 마크 전역 스타일 */}
             <style jsx global>{`
-              .tiptap span[data-region] { font-weight: 700; color: #0472de; cursor: pointer; }
-              .tiptap span[data-region]:hover { text-decoration: underline; }
+              .tiptap span[data-region] {
+                font-weight: 700;
+                color: #0472de;
+                cursor: pointer;
+              }
+              .tiptap span[data-region]:hover {
+                text-decoration: underline;
+              }
             `}</style>
             <EditorContent editor={editor} />
           </>
@@ -304,23 +511,32 @@ function Toolbar({
     (theme === "dark" ? "border-neutral-800 hover:bg-neutral-800/70" : "border-neutral-200 hover:bg-neutral-50");
   const iconClass = "h-8 w-8";
 
-  const TextBtn: React.FC<{ title: string; active?: boolean; disabled?: boolean; onClick: () => void; }> = ({
-    title, active = false, disabled = false, onClick, children,
-  }) => (
+  const TextBtn: React.FC<{
+    title: string;
+    active?: boolean;
+    disabled?: boolean;
+    onClick: () => void;
+  }> = ({ title, active = false, disabled = false, onClick, children }) => (
     <button
       type="button"
       title={title}
       disabled={disabled}
       onClick={onClick}
-      className={[btnBase, btnTone, active ? activeTone : "", disabled ? "opacity-40 cursor-not-allowed" : ""].join(" ")}
+      className={[btnBase, btnTone, active ? activeTone : "", disabled ? "opacity-40 cursor-not-allowed" : ""].join(
+        " "
+      )}
     >
       {children}
     </button>
   );
 
-  const IconBtn: React.FC<{ title: string; src: string; active?: boolean; onClick: () => void; disabled?: boolean; }> = ({
-    title, src, active = false, onClick, disabled = false,
-  }) => (
+  const IconBtn: React.FC<{
+    title: string;
+    src: string;
+    active?: boolean;
+    onClick: () => void;
+    disabled?: boolean;
+  }> = ({ title, src, active = false, onClick, disabled = false }) => (
     <button
       type="button"
       title={title}
@@ -338,12 +554,24 @@ function Toolbar({
   const setBlock = (type: string) => {
     const c = editor.chain().focus();
     switch (type) {
-      case "p": c.setParagraph().run(); break;
-      case "h1": c.toggleHeading({ level: 1 }).run(); break;
-      case "h2": c.toggleHeading({ level: 2 }).run(); break;
-      case "h3": c.toggleHeading({ level: 3 }).run(); break;
-      case "quote": c.toggleBlockquote().run(); break;
-      case "code": c.toggleCodeBlock().run(); break;
+      case "p":
+        c.setParagraph().run();
+        break;
+      case "h1":
+        c.toggleHeading({ level: 1 }).run();
+        break;
+      case "h2":
+        c.toggleHeading({ level: 2 }).run();
+        break;
+      case "h3":
+        c.toggleHeading({ level: 3 }).run();
+        break;
+      case "quote":
+        c.toggleBlockquote().run();
+        break;
+      case "code":
+        c.toggleCodeBlock().run();
+        break;
     }
   };
 
@@ -422,11 +650,17 @@ function Toolbar({
             theme === "dark" ? "bg-neutral-900 border-neutral-800 text-neutral-100" : "bg-white border-neutral-200 text-neutral-900",
           ].join(" ")}
           value={
-            editor.isActive("heading", { level: 1 }) ? "h1"
-            : editor.isActive("heading", { level: 2 }) ? "h2"
-            : editor.isActive("heading", { level: 3 }) ? "h3"
-            : editor.isActive("blockquote") ? "quote"
-            : editor.isActive("codeBlock") ? "code" : "p"
+            editor.isActive("heading", { level: 1 })
+              ? "h1"
+              : editor.isActive("heading", { level: 2 })
+              ? "h2"
+              : editor.isActive("heading", { level: 3 })
+              ? "h3"
+              : editor.isActive("blockquote")
+              ? "quote"
+              : editor.isActive("codeBlock")
+              ? "code"
+              : "p"
           }
           onChange={(e) => setBlock(e.target.value)}
           title="블록 타입"
@@ -442,26 +676,64 @@ function Toolbar({
         <Sep />
 
         {/* 텍스트 */}
-        <TextBtn title="굵게"   active={editor.isActive("bold")}      onClick={() => editor.chain().focus().toggleBold().run()}><b>B</b></TextBtn>
-        <TextBtn title="기울임" active={editor.isActive("italic")}    onClick={() => editor.chain().focus().toggleItalic().run()}><i>I</i></TextBtn>
-        <TextBtn title="밑줄"   active={editor.isActive("underline")} onClick={() => editor.chain().focus().toggleUnderline().run()}><u>U</u></TextBtn>
-        <TextBtn title="취소선" active={editor.isActive("strike")}    onClick={() => editor.chain().focus().toggleStrike().run()}>
+        <TextBtn title="굵게" active={editor.isActive("bold")} onClick={() => editor.chain().focus().toggleBold().run()}>
+          <b>B</b>
+        </TextBtn>
+        <TextBtn title="기울임" active={editor.isActive("italic")} onClick={() => editor.chain().focus().toggleItalic().run()}>
+          <i>I</i>
+        </TextBtn>
+        <TextBtn
+          title="밑줄"
+          active={editor.isActive("underline")}
+          onClick={() => editor.chain().focus().toggleUnderline().run()}
+        >
+          <u>U</u>
+        </TextBtn>
+        <TextBtn
+          title="취소선"
+          active={editor.isActive("strike")}
+          onClick={() => editor.chain().focus().toggleStrike().run()}
+        >
           <span className="line-through">S</span>
         </TextBtn>
 
         <Sep />
 
         {/* 정렬 */}
-        <IconBtn title="왼쪽 정렬"   src="/icons/좌측.png"   active={editor.isActive({ textAlign: "left" })}   onClick={() => editor.chain().focus().setTextAlign("left").run()} />
-        <IconBtn title="가운데 정렬" src="/icons/가운데.png" active={editor.isActive({ textAlign: "center" })} onClick={() => editor.chain().focus().setTextAlign("center").run()} />
-        <IconBtn title="오른쪽 정렬" src="/icons/우측.png"   active={editor.isActive({ textAlign: "right" })}  onClick={() => editor.chain().focus().setTextAlign("right").run()} />
+        <IconBtn
+          title="왼쪽 정렬"
+          src="/icons/좌측.png"
+          active={editor.isActive({ textAlign: "left" })}
+          onClick={() => editor.chain().focus().setTextAlign("left").run()}
+        />
+        <IconBtn
+          title="가운데 정렬"
+          src="/icons/가운데.png"
+          active={editor.isActive({ textAlign: "center" })}
+          onClick={() => editor.chain().focus().setTextAlign("center").run()}
+        />
+        <IconBtn
+          title="오른쪽 정렬"
+          src="/icons/우측.png"
+          active={editor.isActive({ textAlign: "right" })}
+          onClick={() => editor.chain().focus().setTextAlign("right").run()}
+        />
 
         <Sep />
 
         {/* 목록 */}
-        <IconBtn title="글머리 기호" src="/icons/글머리 기호.png" active={editor.isActive("bulletList")} onClick={() => editor.chain().focus().toggleBulletList().run()} />
-        <TextBtn title="번호 목록" active={editor.isActive("orderedList")} onClick={() => editor.chain().focus().toggleOrderedList().run()}>1.</TextBtn>
-        <TextBtn title="할 일 목록" active={editor.isActive("taskList")} onClick={() => editor.chain().focus().toggleTaskList().run()}>☑</TextBtn>
+        <IconBtn
+          title="글머리 기호"
+          src="/icons/글머리 기호.png"
+          active={editor.isActive("bulletList")}
+          onClick={() => editor.chain().focus().toggleBulletList().run()}
+        />
+        <TextBtn title="번호 목록" active={editor.isActive("orderedList")} onClick={() => editor.chain().focus().toggleOrderedList().run()}>
+          1.
+        </TextBtn>
+        <TextBtn title="할 일 목록" active={editor.isActive("taskList")} onClick={() => editor.chain().focus().toggleTaskList().run()}>
+          ☑
+        </TextBtn>
 
         <Sep />
 
@@ -478,33 +750,55 @@ function Toolbar({
         <div className="ml-auto" />
 
         {/* 되돌리기/다시 실행 */}
-        <TextBtn title="되돌리기" onClick={() => editor.chain().focus().undo().run()}>↶</TextBtn>
-        <TextBtn title="다시 실행" onClick={() => editor.chain().focus().redo().run()}>↷</TextBtn>
+        <TextBtn title="되돌리기" onClick={() => editor.chain().focus().undo().run()}>
+          ↶
+        </TextBtn>
+        <TextBtn title="다시 실행" onClick={() => editor.chain().focus().redo().run()}>
+          ↷
+        </TextBtn>
       </div>
 
       {/* 표 전용 툴바 */}
       {tableBarOpen && editor.isActive("table") && (
         <div className={["mt-2 rounded-xl border px-3 py-2 flex flex-wrap items-center gap-2", tone].join(" ")}>
           <span className="text-sm opacity-60 mr-1">표 편집</span>
-          <TextBtn title="행↑+" onClick={() => editor.chain().focus().addRowBefore().run()}>행↑+</TextBtn>
-          <TextBtn title="행↓+" onClick={() => editor.chain().focus().addRowAfter().run()}>행↓+</TextBtn>
-          <TextBtn title="행−"  onClick={() => editor.chain().focus().deleteRow().run()}>행−</TextBtn>
+          <TextBtn title="행↑+" onClick={() => editor.chain().focus().addRowBefore().run()}>
+            행↑+
+          </TextBtn>
+          <TextBtn title="행↓+" onClick={() => editor.chain().focus().addRowAfter().run()}>
+            행↓+
+          </TextBtn>
+          <TextBtn title="행−" onClick={() => editor.chain().focus().deleteRow().run()}>
+            행−
+          </TextBtn>
           <Sep />
-          <TextBtn title="열←+" onClick={() => editor.chain().focus().addColumnBefore().run()}>열←+</TextBtn>
-          <TextBtn title="열→+" onClick={() => editor.chain().focus().addColumnAfter().run()}>열→+</TextBtn>
-          <TextBtn title="열−"  onClick={() => editor.chain().focus().deleteColumn().run()}>열−</TextBtn>
+          <TextBtn title="열←+" onClick={() => editor.chain().focus().addColumnBefore().run()}>
+            열←+
+          </TextBtn>
+          <TextBtn title="열→+" onClick={() => editor.chain().focus().addColumnAfter().run()}>
+            열→+
+          </TextBtn>
+          <TextBtn title="열−" onClick={() => editor.chain().focus().deleteColumn().run()}>
+            열−
+          </TextBtn>
           <Sep />
-          <TextBtn title="헤더" onClick={() => editor.chain().focus().toggleHeaderRow().run()}>헤더</TextBtn>
-          <TextBtn title="표 삭제" onClick={() => editor.chain().focus().deleteTable().run()}>표 삭제</TextBtn>
+          <TextBtn title="헤더" onClick={() => editor.chain().focus().toggleHeaderRow().run()}>
+            헤더
+          </TextBtn>
+          <TextBtn title="표 삭제" onClick={() => editor.chain().focus().deleteTable().run()}>
+            표 삭제
+          </TextBtn>
         </div>
       )}
 
-      {/* 표 만들기 모달 - Body 포털로 렌더 */}
+      {/* 표 만들기 모달 (Body 포털로 중앙 배치) */}
       {showTableModal && (
         <BodyPortal>
           <div
             className="fixed inset-0 z-[10000] bg-black/40 backdrop-blur-[2px] flex items-center justify-center"
-            onClick={(e) => { if (e.target === e.currentTarget) setShowTableModal(false); }}
+            onClick={(e) => {
+              if (e.target === e.currentTarget) setShowTableModal(false);
+            }}
           >
             <div
               className={`rounded-xl border w-[360px] max-w-[90vw] bg-white p-5 shadow-2xl ${
@@ -518,7 +812,9 @@ function Toolbar({
                 <label className="flex items-center justify-between">
                   <span>행 개수</span>
                   <input
-                    type="number" min={1} value={rows}
+                    type="number"
+                    min={1}
+                    value={rows}
                     onChange={(e) => setRows(Math.max(1, Number(e.target.value) || 1))}
                     className="w-24 rounded-md border px-2 py-1"
                   />
@@ -526,7 +822,9 @@ function Toolbar({
                 <label className="flex items-center justify-between">
                   <span>열 개수</span>
                   <input
-                    type="number" min={1} value={cols}
+                    type="number"
+                    min={1}
+                    value={cols}
                     onChange={(e) => setCols(Math.max(1, Number(e.target.value) || 1))}
                     className="w-24 rounded-md border px-2 py-1"
                   />
@@ -537,7 +835,9 @@ function Toolbar({
                 </label>
               </div>
               <div className="mt-5 flex justify-end gap-2">
-                <button onClick={() => setShowTableModal(false)} className="h-9 px-3 rounded-md border">취소</button>
+                <button onClick={() => setShowTableModal(false)} className="h-9 px-3 rounded-md border">
+                  취소
+                </button>
                 <button
                   onClick={() => {
                     editor.chain().focus().insertTable({ rows, cols, withHeaderRow: true }).run();
