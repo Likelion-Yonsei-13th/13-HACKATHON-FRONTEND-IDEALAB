@@ -71,7 +71,11 @@ function debounce<F extends (...args: any[]) => void>(fn: F, wait: number) {
 }
 
 function esc(s: string) {
-  return s.replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;").replaceAll('"', "&quot;");
+  return s
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;");
 }
 
 /* -------------------- Body Portal -------------------- */
@@ -81,7 +85,6 @@ function BodyPortal({ children }: { children: React.ReactNode }) {
 }
 
 /* -------------------- API 래퍼 -------------------- */
-/** 블록 생성 (백이 요구하는 필드 포맷: meeting, parent_block, order_no, type, level, text) */
 async function apiCreateBlock(params: {
   meeting: number;
   text: string;
@@ -109,9 +112,7 @@ async function apiCreateBlock(params: {
   let data: any = {};
   try {
     data = txt ? JSON.parse(txt) : {};
-  } catch {
-    /* ignore */
-  }
+  } catch {}
 
   if (!res.ok) {
     const err: any = new Error(`create ${res.status}`);
@@ -126,7 +127,6 @@ async function apiCreateBlock(params: {
   };
 }
 
-/** 블록 상세 조회 → 현재 version 확보 */
 async function apiGetBlock(id: string) {
   const res = await fetch(ENDPOINTS.blocks.detail(id), {
     method: "GET",
@@ -149,7 +149,6 @@ async function apiGetBlock(id: string) {
   };
 }
 
-/** 블록 수정 (낙관적 락) — 409 나오면 에러로 currentVersion 실어줌 */
 async function apiPatchBlock(id: string, text: string, version: number) {
   const res = await fetch(ENDPOINTS.blocks.update(id), {
     method: "PATCH",
@@ -182,14 +181,13 @@ async function apiPatchBlock(id: string, text: string, version: number) {
 
 /* -------------------- Props -------------------- */
 export type EditorProps = {
-  /** 존재하는 블록 id(숫자)면 그 블록을 수정 / 아니라면 새 블록 생성해서 연결 */
   docId: string | number;
   initialHTML?: string;
   toolbarOffset?: number;
   toolbarTheme?: "light" | "dark";
-  /** 서버 요구: 새 블록 만들 때 반드시 **숫자** meeting id 필요 */
-  meetingId?: string | number;
+  /** 서버 저장을 켤지 여부 (기본 false). 켜면 meetingId도 필요 */
   persist?: boolean;
+  meetingId?: string | number;
 };
 
 /* ==================== 메인 Editor ==================== */
@@ -198,19 +196,27 @@ export default function Editor({
   initialHTML,
   toolbarOffset = 0,
   toolbarTheme = "light",
+  persist = false, // ✅ 기본은 프론트 단독 모드
   meetingId,
 }: EditorProps) {
   const setRegion = useInsightStore((s) => s.setRegion);
   const openRightFromStore =
     useUIStore((s: any) => s.openRightPanel || s.setRightOpen || s.openRight || null);
 
-  /* 숫자 meeting id 파싱 */
+  /* 서버 상태 플래그: 한번 404/405 나면 이후 서버 저장 중단 */
+  const serverDownRef = useRef(false);
+
+  /* 로컬 스토리지 키 */
+  const lsKey = useMemo(() => `doc:${docId}`, [docId]);
+
+  /* 숫자 meeting id 파싱 (persist가 켜진 경우에만 필요) */
   const numericMeeting = useMemo(() => {
+    if (!persist) return null;
     const m = meetingId;
     if (typeof m === "number") return m;
     if (typeof m === "string" && /^\d+$/.test(m)) return Number(m);
     return null;
-  }, [meetingId]);
+  }, [meetingId, persist]);
 
   /* TipTap */
   const editor = useEditor({
@@ -241,10 +247,23 @@ export default function Editor({
     immediatelyRender: false,
     editorProps: {
       attributes: {
-        class: "tiptap prose prose-neutral max-w-none focus:outline-none min-h-[70dvh] px-0 py-0",
+        class:
+          "tiptap prose prose-neutral max-w-none focus:outline-none min-h-[70dvh] px-0 py-0",
       },
     },
   });
+
+  /* 초기 로드 시 로컬 저장본 있으면 우선 적용 */
+  useEffect(() => {
+    if (!editor) return;
+    try {
+      const fromLS = localStorage.getItem(lsKey);
+      if (fromLS && fromLS.trim()) {
+        editor.commands.setContent(fromLS, false);
+      }
+    } catch {}
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [editor, lsKey]);
 
   /* RegionMark → 우측 패널 연동 */
   useEffect(() => {
@@ -275,26 +294,35 @@ export default function Editor({
   const [blockId, setBlockId] = useState<string | null>(initialBlockId);
   const [version, setVersion] = useState<number | null>(null);
 
-  /* 기존 블록이면 현재 버전 가져옴 */
+  /* 기존 블록이면 현재 버전 가져옴 (persist ON + 서버 사용 가능할 때만) */
   useEffect(() => {
     (async () => {
+      if (!persist || serverDownRef.current) return;
       if (!blockId) return;
       try {
         const info = await apiGetBlock(blockId);
         setVersion(info.version);
-      } catch (e) {
+      } catch (e: any) {
+        // 서버가 죽었거나 404면 이후 시도 중단
+        if (e?.status === 404 || e?.status === 405) serverDownRef.current = true;
         console.warn("[init] get block failed:", e);
       }
     })();
-  }, [blockId]);
+  }, [blockId, persist]);
 
   /* ---------- 블록 보장 함수(없으면 생성) ---------- */
-  async function ensureBlockId(getHtml: () => string): Promise<{ id: string | null; ver: number | null }> {
+  async function ensureBlockId(
+    getHtml: () => string
+  ): Promise<{ id: string | null; ver: number | null }> {
+    // 서버 저장을 안 쓰는 경우엔 바로 스킵
+    if (!persist || serverDownRef.current) return { id: null, ver: null };
     if (blockId && version != null) return { id: blockId, ver: version };
 
     // 새로 만들어야 할 경우 meeting id가 꼭 숫자여야 함
     if (!numericMeeting) {
-      console.warn("[autosave] meetingId(숫자)가 없어서 새 블록을 만들 수 없음");
+      console.warn(
+        "[autosave] meetingId(숫자)가 없어서 새 블록을 만들 수 없음"
+      );
       return { id: null, ver: null };
     }
     try {
@@ -310,24 +338,34 @@ export default function Editor({
       setBlockId(created.id);
       setVersion(created.version);
       return { id: created.id, ver: created.version };
-    } catch (e) {
+    } catch (e: any) {
+      if (e?.status === 404 || e?.status === 405) serverDownRef.current = true;
       console.warn("[create] block create failed:", e);
       return { id: null, ver: null };
     }
   }
 
-  /* ---------- 자동 저장 ---------- */
+  /* ---------- 로컬/서버 자동 저장 ---------- */
   const saveCtrlRef = useRef<AbortController | null>(null);
+
+  const localSave = useMemo(
+    () =>
+      debounce((html: string) => {
+        try {
+          localStorage.setItem(lsKey, html);
+        } catch {}
+      }, 200),
+    [lsKey]
+  );
 
   const saveToServer = useMemo(
     () =>
       debounce(async (html: string) => {
+        if (!persist || serverDownRef.current) return;
+
         try {
           const info = await ensureBlockId(() => html);
-          if (!info.id || info.ver == null) {
-            console.warn("[autosave] block id / version 확보 실패 → 스킵");
-            return;
-          }
+          if (!info.id || info.ver == null) return;
 
           if (saveCtrlRef.current) saveCtrlRef.current.abort();
           const ctrl = new AbortController();
@@ -340,7 +378,7 @@ export default function Editor({
             return;
           } catch (e: any) {
             if (e?.status === 409) {
-              // 응답에 currentVersion이 없더라도 GET으로 최신 버전 받아 재시도
+              // 최신 버전 재조회 후 재시도
               try {
                 const latest = await apiGetBlock(info.id);
                 const r2 = await apiPatchBlock(info.id, html, latest.version);
@@ -353,7 +391,8 @@ export default function Editor({
             throw e;
           }
         } catch (e: any) {
-          // 마지막으로 서버 버전 동기화만 시도
+          if (e?.status === 404 || e?.status === 405) serverDownRef.current = true;
+          // 마지막으로 버전만 동기화
           try {
             if (blockId) {
               const fresh = await apiGetBlock(blockId);
@@ -363,7 +402,7 @@ export default function Editor({
           console.warn("자동 저장 실패:", e);
         }
       }, 800),
-    [blockId, version, numericMeeting]
+    [blockId, version, persist]
   );
 
   useEffect(() => {
@@ -371,27 +410,33 @@ export default function Editor({
     const onUpdate = throttle(() => {
       try {
         const html = editor.getHTML();
+        // 항상 로컬 저장
+        localSave(html);
+        // 필요 시 서버 저장
         saveToServer(html);
       } catch {}
     }, 120);
     editor.on("update", onUpdate);
     return () => {
       try {
+        (localSave as any).flush?.();
         (saveToServer as any).flush?.();
       } catch {}
     };
-  }, [editor, saveToServer]);
+  }, [editor, localSave, saveToServer]);
 
   /* ---------- 녹음 패널 ---------- */
   const [recOpen, setRecOpen] = useState(false);
   const setCollapsed = useUIStore((s) =>
-    (s as any).setCollapsed?.bind?.(null, undefined) ? (s as any).setCollapsed : () => {}
+    (s as any).setCollapsed?.bind?.(null, undefined)
+      ? (s as any).setCollapsed
+      : () => {}
   );
 
   const handleOpenRecorder = async () => {
-    // ✅ meetingId가 숫자로 준비 안 됐으면 녹음 열지 않기 (ws1 → 404 방지)
-    if (numericMeeting == null) {
-      alert("회의 ID가 아직 준비되지 않았어요. 잠시 후 다시 시도해 주세요.");
+    // 서버 저장이 꺼져 있으면 녹음 패널은 비활성화(요약을 서버에 못 올리므로)
+    if (!persist || numericMeeting == null) {
+      alert("회의 녹음은 서버 연결이 필요합니다. (persist=true + meetingId 설정)");
       return;
     }
 
@@ -399,15 +444,21 @@ export default function Editor({
       const tmp = await navigator.mediaDevices.getUserMedia({ audio: true });
       tmp.getTracks().forEach((t) => t.stop());
     } catch {
-      alert("마이크 권한을 허용해 주세요 (주소창 왼쪽 자물쇠 아이콘 → 마이크: 허용).");
+      alert(
+        "마이크 권한을 허용해 주세요 (주소창 왼쪽 자물쇠 아이콘 → 마이크: 허용)."
+      );
       return;
     }
-    try { setCollapsed(true as any); } catch {}
+    try {
+      setCollapsed(true as any);
+    } catch {}
     setRecOpen(true);
   };
 
   const handleCloseRecorder = () => {
-    try { setCollapsed(false as any); } catch {}
+    try {
+      setCollapsed(false as any);
+    } catch {}
     setRecOpen(false);
   };
 
@@ -419,16 +470,22 @@ export default function Editor({
     );
   }
 
-  /* 녹음 패널에서 사용할 meeting id — 숫자만 허용 */
   const effectiveMeetingId = numericMeeting ?? undefined;
 
   return (
     <div className="w-full">
       {/* 상단 툴바(녹음 중 숨김) */}
       {!recOpen && (
-        <div className="sticky z-30 w-full bg-white/90 backdrop-blur" style={{ top: toolbarOffset }}>
+        <div
+          className="sticky z-30 w-full bg-white/90 backdrop-blur"
+          style={{ top: toolbarOffset }}
+        >
           <div className="mx-auto w-full px-4 py-2">
-            <Toolbar editor={editor} theme={toolbarTheme} onOpenRecorder={handleOpenRecorder} />
+            <Toolbar
+              editor={editor}
+              theme={toolbarTheme}
+              onOpenRecorder={handleOpenRecorder}
+            />
           </div>
         </div>
       )}
@@ -452,6 +509,7 @@ export default function Editor({
               editor.commands.insertContent(html);
               try {
                 (saveToServer as any).flush?.();
+                (localSave as any).flush?.();
               } catch {}
             }}
           />
@@ -503,11 +561,15 @@ function Toolbar({
   const btnBase =
     "h-9 rounded-md px-2 text-sm inline-flex items-center justify-center gap-1 border transition active:scale-[.98]";
   const btnTone =
-    theme === "dark" ? "border-neutral-800 hover:bg-neutral-800/70" : "border-neutral-200 hover:bg-neutral-50";
+    theme === "dark"
+      ? "border-neutral-800 hover:bg-neutral-800/70"
+      : "border-neutral-200 hover:bg-neutral-50";
   const activeTone = theme === "dark" ? "bg-neutral-800" : "bg-neutral-100";
   const iconBtnBase =
     "h-9 w-9 rounded-md inline-flex items-center justify-center border transition active:scale-[.98] " +
-    (theme === "dark" ? "border-neutral-800 hover:bg-neutral-800/70" : "border-neutral-200 hover:bg-neutral-50");
+    (theme === "dark"
+      ? "border-neutral-800 hover:bg-neutral-800/70"
+      : "border-neutral-200 hover:bg-neutral-50");
   const iconClass = "h-8 w-8";
 
   const TextBtn: React.FC<{
@@ -521,9 +583,12 @@ function Toolbar({
       title={title}
       disabled={disabled}
       onClick={onClick}
-      className={[btnBase, btnTone, active ? activeTone : "", disabled ? "opacity-40 cursor-not-allowed" : ""].join(
-        " "
-      )}
+      className={[
+        btnBase,
+        btnTone,
+        active ? activeTone : "",
+        disabled ? "opacity-40 cursor-not-allowed" : "",
+      ].join(" ")}
     >
       {children}
     </button>
@@ -542,13 +607,23 @@ function Toolbar({
       aria-label={title}
       onClick={onClick}
       disabled={disabled}
-      className={[iconBtnBase, active ? activeTone : "", disabled ? "opacity-40 cursor-not-allowed" : ""].join(" ")}
+      className={[
+        iconBtnBase,
+        active ? activeTone : "",
+        disabled ? "opacity-40 cursor-not-allowed" : "",
+      ].join(" ")}
     >
       <img src={src} alt={title} className={iconClass} />
     </button>
   );
 
-  const Sep = () => <span className={theme === "dark" ? "mx-1 h-5 w-px bg-neutral-800" : "mx-1 h-5 w-px bg-neutral-200"} />;
+  const Sep = () => (
+    <span
+      className={
+        theme === "dark" ? "mx-1 h-5 w-px bg-neutral-800" : "mx-1 h-5 w-px bg-neutral-200"
+      }
+    />
+  );
 
   const setBlock = (type: string) => {
     const c = editor.chain().focus();
@@ -609,7 +684,9 @@ function Toolbar({
       editor
         .chain()
         .focus()
-        .insertContent(`<a href="${url}" download="${file.name}" target="_blank" rel="noopener">${file.name}</a>`)
+        .insertContent(
+          `<a href="${url}" download="${file.name}" target="_blank" rel="noopener">${file.name}</a>`
+        )
         .run();
     };
     input.click();
@@ -626,14 +703,18 @@ function Toolbar({
         editor
           .chain()
           .focus()
-          .insertContent(`<video controls src="${url}" style="max-width:100%;border-radius:8px;"></video>`)
+          .insertContent(
+            `<video controls src="${url}" style="max-width:100%;border-radius:8px;"></video>`
+          )
           .run();
         return;
       }
       const link = window.prompt("동영상 URL(YouTube iframe 또는 mp4 링크)을 입력하세요");
       if (!link) return;
       const isIframe = link.includes("<iframe");
-      const html = isIframe ? link : `<video controls src="${link}" style="max-width:100%;border-radius:8px;"></video>`;
+      const html = isIframe
+        ? link
+        : `<video controls src="${link}" style="max-width:100%;border-radius:8px;"></video>`;
       editor.chain().focus().insertContent(html).run();
     };
     input.click();
@@ -646,7 +727,9 @@ function Toolbar({
         <select
           className={[
             "h-9 rounded-md border px-2 text-sm",
-            theme === "dark" ? "bg-neutral-900 border-neutral-800 text-neutral-100" : "bg-white border-neutral-200 text-neutral-900",
+            theme === "dark"
+              ? "bg-neutral-900 border-neutral-800 text-neutral-100"
+              : "bg-white border-neutral-200 text-neutral-900",
           ].join(" ")}
           value={
             editor.isActive("heading", { level: 1 })
@@ -681,18 +764,10 @@ function Toolbar({
         <TextBtn title="기울임" active={editor.isActive("italic")} onClick={() => editor.chain().focus().toggleItalic().run()}>
           <i>I</i>
         </TextBtn>
-        <TextBtn
-          title="밑줄"
-          active={editor.isActive("underline")}
-          onClick={() => editor.chain().focus().toggleUnderline().run()}
-        >
+        <TextBtn title="밑줄" active={editor.isActive("underline")} onClick={() => editor.chain().focus().toggleUnderline().run()}>
           <u>U</u>
         </TextBtn>
-        <TextBtn
-          title="취소선"
-          active={editor.isActive("strike")}
-          onClick={() => editor.chain().focus().toggleStrike().run()}
-        >
+        <TextBtn title="취소선" active={editor.isActive("strike")} onClick={() => editor.chain().focus().toggleStrike().run()}>
           <span className="line-through">S</span>
         </TextBtn>
 
@@ -727,10 +802,18 @@ function Toolbar({
           active={editor.isActive("bulletList")}
           onClick={() => editor.chain().focus().toggleBulletList().run()}
         />
-        <TextBtn title="번호 목록" active={editor.isActive("orderedList")} onClick={() => editor.chain().focus().toggleOrderedList().run()}>
+        <TextBtn
+          title="번호 목록"
+          active={editor.isActive("orderedList")}
+          onClick={() => editor.chain().focus().toggleOrderedList().run()}
+        >
           1.
         </TextBtn>
-        <TextBtn title="할 일 목록" active={editor.isActive("taskList")} onClick={() => editor.chain().focus().toggleTaskList().run()}>
+        <TextBtn
+          title="할 일 목록"
+          active={editor.isActive("taskList")}
+          onClick={() => editor.chain().focus().toggleTaskList().run()}
+        >
           ☑
         </TextBtn>
 
