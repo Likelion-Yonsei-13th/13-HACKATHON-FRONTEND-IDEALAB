@@ -3,6 +3,7 @@
 
 import { useRouter } from "next/navigation";
 import { useState } from "react";
+import { ENDPOINTS } from "@/lib/endpoints";
 
 export default function SignupPage() {
   const router = useRouter();
@@ -28,9 +29,11 @@ export default function SignupPage() {
 
     setLoading(true);
     try {
-      const r = await fetch("/api/signup", {
+      const r = await fetch(ENDPOINTS.auth.signup, {
         method: "POST",
         headers: { "content-type": "application/json" },
+        // 세션/쿠키 인증이라면 아래 주석 해제
+        // credentials: "include",
         body: JSON.stringify({
           name,
           nickname,
@@ -41,7 +44,7 @@ export default function SignupPage() {
 
       if (!r.ok) {
         const j = await r.json().catch(() => ({}));
-        setErr(j?.message || "회원가입 실패");
+        setErr(j?.message || `회원가입 실패 (HTTP ${r.status})`);
         setLoading(false);
         return;
       }
@@ -57,6 +60,7 @@ export default function SignupPage() {
     <div className="min-h-dvh flex items-center justify-center">
       <div className="w-[420px] rounded-2xl bg-white p-8 shadow-lg">
         <h2 className="text-center text-2xl font-semibold mb-6">회원가입</h2>
+
         <form onSubmit={submit} className="space-y-4">
           <div className="flex gap-3">
             <input
@@ -91,6 +95,7 @@ export default function SignupPage() {
             value={pw}
             onChange={(e) => setPw(e.target.value)}
             required
+            minLength={6}
           />
 
           <input
@@ -100,13 +105,13 @@ export default function SignupPage() {
             value={pw2}
             onChange={(e) => setPw2(e.target.value)}
             required
+            minLength={6}
           />
 
           {err && <p className="text-sm text-red-600">{err}</p>}
 
           <label className="flex items-center text-sm text-neutral-700">
-            <input type="checkbox" required className="mr-2" /> 개인정보 수집 및
-            이용에 동의합니다.
+            <input type="checkbox" required className="mr-2" /> 개인정보 수집 및 이용에 동의합니다.
           </label>
 
           <button

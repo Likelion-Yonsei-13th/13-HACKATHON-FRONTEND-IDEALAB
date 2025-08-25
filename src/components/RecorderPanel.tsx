@@ -3,8 +3,8 @@
 
 import { useEffect, useRef, useState } from "react";
 import dynamic from "next/dynamic";
+import { ENDPOINTS } from "@/lib/endpoints";
 
-// RIGHT 탭(클라이언트 전용)
 const RightTabEmbed = dynamic(() => import("@/components/RightTabEmbed"), { ssr: false });
 
 export type RecorderResult = {
@@ -15,10 +15,20 @@ export type RecorderResult = {
 
 type RecStatus = "rec" | "pause" | "processing";
 
+// ✅ 브라우저 전역에 webkitSpeechRecognition 선언만 추가 (문법 안전)
+declare global {
+  interface Window {
+    webkitSpeechRecognition?: any;
+    SpeechRecognition?: any;
+  }
+}
+
 export default function RecorderPanel({
+  meetingId = "1",
   onClose,
   onFinish,
 }: {
+  meetingId?: string | number;
   onClose: () => void;
   onFinish: (p: RecorderResult) => void;
 }) {
@@ -26,313 +36,163 @@ export default function RecorderPanel({
   const [partial, setPartial] = useState("");
   const [finals, setFinals] = useState<string[]>([]);
   const [summary, setSummary] = useState<string | null>(null);
-  const [audioUrl, setAudioUrl] = useState<string | null>(null);
 
-  // ── 내부 상태/리소스 ──
-  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
-  const micStreamRef = useRef<MediaStream | null>(null);
-  const wsRef = useRef<WebSocket | null>(null);
-  const httpStopRef = useRef<null | (() => Promise<void>)>(null);
-  const sessionIdRef = useRef<string>("");
-  const usingWSRef = useRef<boolean>(false);
-  const mimeRef = useRef<string>("");
-  const finalizedRef = useRef<boolean>(false);
-  const chunkTimerRef = useRef<number | null>(null);
-  const hardPauseRef = useRef<boolean>(false); // ← 일시정지 목적의 stop 구분
+  const recognitionRef = useRef<any>(null);
+  const startedAtRef = useRef<number>(0);
+  const runningRef = useRef<boolean>(false);
 
-  // ── Endpoint ──
-  const WS_URL =
-    typeof location !== "undefined"
-      ? `${location.protocol === "https:" ? "wss" : "ws"}://${location.host}/stt/stream`
-      : "/stt/stream";
-  const HTTP_CHUNK_URL = `/stt/chunk`;
-  const HTTP_FINALIZE_URL = `/stt/finalize`;
-
-  // 적절한 mime 고르기
-  function pickMimeType() {
-    if (typeof MediaRecorder !== "undefined") {
-      if (MediaRecorder.isTypeSupported("audio/ogg;codecs=opus")) return "audio/ogg;codecs=opus";
-      if (MediaRecorder.isTypeSupported("audio/webm;codecs=opus")) return "audio/webm;codecs=opus";
+  async function postChunk(text: string, start_ms: number, end_ms: number) {
+    try {
+      const res = await fetch(ENDPOINTS.meetings.stt.chunk(meetingId), {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ text, start_ms, end_ms }),
+      });
+      if (!res.ok) {
+        const t = await res.text().catch(() => "");
+        console.error("stt-chunk error:", res.status, t);
+      }
+    } catch (e) {
+      console.error("stt-chunk network error", e);
     }
-    return "";
+  }
+
+  async function finalizeMeeting() {
+    try {
+      const res = await fetch(ENDPOINTS.meetings.stt.finalize(meetingId), { method: "POST" });
+      const data = (await res.json().catch(() => ({}))) as any;
+      onFinish({
+        audioUrl: data.audioUrl || "",
+        transcript: data.transcript || finals.join("\n"),
+        summary: data.summary || "",
+      });
+      setSummary(data.summary || "");
+    } catch (e) {
+      console.error("finalize error", e);
+      onFinish({
+        audioUrl: "",
+        transcript: finals.join("\n"),
+        summary: summary || "",
+      });
+    }
+  }
+
+  function startRecognition() {
+    const SR: any = window.webkitSpeechRecognition || window.SpeechRecognition;
+    if (!SR) {
+      alert("이 브라우저는 실시간 음성 인식을 지원하지 않습니다. (Chrome 권장)");
+      return;
+    }
+
+    const rec = new SR();
+    recognitionRef.current = rec;
+    rec.lang = "ko-KR";
+    rec.continuous = true;
+    rec.interimResults = true;
+
+    startedAtRef.current = performance.now();
+    runningRef.current = true;
+    setStatus("rec");
+
+    rec.onresult = (event: any) => {
+      let interim = "";
+      let finalsBatch: string[] = [];
+
+      for (let i = event.resultIndex; i < event.results.length; i++) {
+        const r = event.results[i];
+        if (r.isFinal) finalsBatch.push(r[0].transcript.trim());
+        else interim += r[0].transcript;
+      }
+
+      setPartial(interim);
+
+      if (finalsBatch.length) {
+        const text = finalsBatch.join(" ");
+        const now = performance.now();
+        const start_ms = Math.floor(startedAtRef.current);
+        const end_ms = Math.floor(now);
+        setFinals((prev) => [...prev, text]);
+        postChunk(text, start_ms, end_ms);
+        startedAtRef.current = now;
+        setPartial("");
+      }
+    };
+
+rec.onerror = (e: any) => {
+  console.warn("SpeechRecognition error", e);
+  // 일부 브라우저에서 권한/캡처/무음 등으로 aborted, no-speech가 자주 뜸
+  if (runningRef.current && (e.error === "aborted" || e.error === "no-speech" || e.error === "audio-capture")) {
+    // 잠깐 쉬었다가 재시작
+    setTimeout(() => {
+      try { rec.start(); } catch {}
+    }, 500);
+  }
+};
+
+    rec.onend = () => {
+      if (runningRef.current) {
+        try {
+          rec.start();
+        } catch {}
+      }
+    };
+
+    try {
+      rec.start();
+    } catch (e) {
+      console.error(e);
+      alert("음성 인식 시작 실패");
+    }
   }
 
   useEffect(() => {
-    // 첫 시작
-    boot().catch((e) => {
-      alert("마이크 권한/연결 오류");
-      console.error(e);
-    });
-    return cleanupHard;
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    startRecognition();
+    return () => {
+      runningRef.current = false;
+      try {
+        recognitionRef.current?.stop?.();
+      } catch {}
+      recognitionRef.current = null;
+    };
   }, []);
 
-  // ── 타이머(청크 요청) ──
-  function startChunkTimer(mr: MediaRecorder) {
-    stopChunkTimer();
-    chunkTimerRef.current = window.setInterval(() => {
-      try {
-        if (mr.state === "recording") mr.requestData();
-      } catch {}
-    }, 3000);
-  }
-  function stopChunkTimer() {
-    if (chunkTimerRef.current) {
-      clearInterval(chunkTimerRef.current);
-      chunkTimerRef.current = null;
-    }
-  }
+  const handlePauseOrResume = () => {
+    const rec = recognitionRef.current;
+    if (!rec) return;
 
-  // ── 공통: MR 핸들러 장착 ──
-  function wireRecorder(mr: MediaRecorder) {
-    mr.onstart = () => {
-      setStatus("rec");
-      startChunkTimer(mr);
-    };
-    mr.onpause = () => {
+    if (status === "rec") {
+      runningRef.current = false;
+      try { rec.stop(); } catch {}
       setStatus("pause");
-      stopChunkTimer();
-    };
-    mr.onresume = () => {
+    } else {
+      runningRef.current = true;
+      startedAtRef.current = performance.now();
+      try { rec.start(); } catch {}
       setStatus("rec");
-      startChunkTimer(mr);
-    };
-    mr.onstop = () => {
-      // hard pause 목적의 stop이면 'processing' 상태로 바꾸지 않음
-      stopChunkTimer();
-      if (!hardPauseRef.current) setStatus("processing");
-    };
-
-    // 데이터 전송
-    mr.ondataavailable = async (e) => {
-      if (!e.data || e.data.size === 0) return;
-
-      if (usingWSRef.current) {
-        if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
-          wsRef.current.send(e.data);
-        }
-      } else {
-        // HTTP 업로드
-        const fd = new FormData();
-        fd.append("audio", e.data, `chunk.${mimeRef.current.includes("ogg") ? "ogg" : "webm"}`);
-        fd.append("sessionId", sessionIdRef.current);
-        fd.append("lang", "ko");
-        try {
-          const r = await fetch(HTTP_CHUNK_URL, { method: "POST", body: fd });
-          const d = await r.json();
-          if (d.partial) setPartial(d.partial);
-          if (d.final) setFinals((p) => [...p, d.final]);
-        } catch (err) {
-          console.warn("청크 업로드 실패", err);
-        }
-      }
-    };
-  }
-
-  // ── MR 생성/시작 (스트림은 살아있다고 가정) ──
-  function createAndStartRecorder() {
-    const stream = micStreamRef.current!;
-    const mr = new MediaRecorder(stream, mimeRef.current ? { mimeType: mimeRef.current } : undefined);
-    mediaRecorderRef.current = mr;
-    wireRecorder(mr);
-    mr.start(); // timeslice 없이
-  }
-
-  // ── WS 메시지 핸들 ──
-  function wireWS(ws: WebSocket) {
-    ws.onmessage = (evt) => {
-      try {
-        const m = JSON.parse(evt.data);
-        if (m.type === "partial") setPartial(m.text ?? "");
-        else if (m.type === "final") setFinals((p) => [...p, m.text ?? ""]);
-        else if (m.type === "summary") {
-          if (finalizedRef.current) return;
-          finalizedRef.current = true;
-          setSummary(m.summary ?? "");
-          setAudioUrl(m.audioUrl ?? "");
-          onFinish({
-            audioUrl: m.audioUrl ?? "",
-            transcript: (finals.join("\n") || ""),
-            summary: m.summary ?? "",
-          });
-        }
-      } catch {}
-    };
-  }
-
-  // ── 초기 부팅: 스트림, 전송 채널, 레코더 ──
-  async function boot() {
-    // 마이크
-    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-    micStreamRef.current = stream;
-
-    // mime
-    mimeRef.current = pickMimeType();
-    sessionIdRef.current = crypto.randomUUID();
-    finalizedRef.current = false;
-
-    // 1) WebSocket 시도
-    try {
-      await new Promise<void>((resolve, reject) => {
-        const codec = mimeRef.current.includes("ogg")
-          ? "ogg_opus"
-          : mimeRef.current.includes("webm")
-          ? "webm_opus"
-          : "unknown";
-        const ws = new WebSocket(`${WS_URL}?lang=ko&codec=${codec}`);
-        ws.binaryType = "arraybuffer";
-        wsRef.current = ws;
-
-        ws.onopen = () => {
-          ws.send(
-            JSON.stringify({
-              type: "start",
-              sessionId: sessionIdRef.current,
-              contentType: mimeRef.current || "audio/webm;codecs=opus",
-            }),
-          );
-          wireWS(ws);
-          resolve();
-        };
-        ws.onerror = () => reject(new Error("ws-fail"));
-      });
-
-      usingWSRef.current = true;
-    } catch {
-      // 2) HTTP 폴백
-      httpStopRef.current = async () => {
-        if (finalizedRef.current) return;
-        const r = await fetch(
-          `${HTTP_FINALIZE_URL}?sessionId=${encodeURIComponent(sessionIdRef.current)}`,
-          { method: "POST" },
-        );
-        const fin = await r.json(); // { audioUrl, transcript, summary }
-        finalizedRef.current = true;
-        setSummary(fin.summary ?? "");
-        setAudioUrl(fin.audioUrl ?? "");
-        onFinish({
-          audioUrl: fin.audioUrl ?? "",
-          transcript: fin.transcript ?? finals.join("\n"),
-          summary: fin.summary ?? "",
-        });
-      };
-      usingWSRef.current = false;
-    }
-
-    // 첫 레코더 시작
-    createAndStartRecorder();
-  }
-
-  // ── 정리 ──
-  function closeWS() {
-    try {
-      if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) wsRef.current.close();
-    } catch {}
-    wsRef.current = null;
-  }
-  function stopAllTracks() {
-    try {
-      mediaRecorderRef.current?.stream?.getTracks?.().forEach((t) => t.stop());
-    } catch {}
-    try {
-      micStreamRef.current?.getTracks?.forEach((t) => t.stop());
-    } catch {}
-    mediaRecorderRef.current = null;
-    micStreamRef.current = null;
-    stopChunkTimer();
-  }
-  function cleanupSoft() {
-    try {
-      if (usingWSRef.current && wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
-        wsRef.current.send(JSON.stringify({ type: "stop", sessionId: sessionIdRef.current }));
-      }
-    } catch {}
-  }
-  function cleanupHard() {
-    cleanupSoft();
-    closeWS();
-    stopAllTracks();
-  }
-
-  // ── 컨트롤: 일시정지/재개/정지/닫기 ──
-  const handlePauseOrResume = async () => {
-    const mr = mediaRecorderRef.current;
-
-    // 아직 시작 전이면 무시
-    if (!mr && status === "rec") return;
-
-    // 녹음 중 → 일시정지 (stop으로 플러시만, 세션/WS는 유지)
-    if (mr && mr.state === "recording") {
-      hardPauseRef.current = true;
-      try {
-        mr.stop(); // onstop에서 processing으로 안 바꾸도록 hardPauseRef로 구분
-      } catch {}
-      setStatus("pause");
-      return;
-    }
-
-    // 일시정지 → 재개 (새 MediaRecorder 생성/시작)
-    if (status === "pause") {
-      hardPauseRef.current = false;
-
-      // 스트림이 죽었으면 재획득
-      let stream = micStreamRef.current;
-      if (!stream || stream.getTracks().every((t) => t.readyState === "ended")) {
-        stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-        micStreamRef.current = stream;
-      }
-
-      createAndStartRecorder();
-      setStatus("rec");
-      return;
     }
   };
 
   const handleStop = async () => {
-    if (finalizedRef.current) return;
+    runningRef.current = false;
     setStatus("processing");
-
-    // 완전 정지
-    try {
-      mediaRecorderRef.current?.stop();
-    } catch {}
-    cleanupSoft();
-
-    // HTTP는 finalize 호출
-    if (!usingWSRef.current && httpStopRef.current) {
-      await httpStopRef.current();
-    }
-
-    stopAllTracks();
-    setTimeout(closeWS, 800);
+    try { recognitionRef.current?.stop?.(); } catch {}
+    await finalizeMeeting();
+    setStatus("pause");
   };
 
   const handleClose = async () => {
     await handleStop();
-    // 서버 요약 응답 전에 닫는 경우 최소 결과 전달
-    if (onFinish && !finalizedRef.current) {
-      onFinish({
-        audioUrl: audioUrl || "",
-        transcript: finals.join("\n"),
-        summary: summary || "",
-      });
-      finalizedRef.current = true;
-    }
-    cleanupHard();
     onClose();
   };
 
-  // ── UI ──
   return (
     <div className="px-6 pt-3">
-      {/* 헤더 */}
       <div className="flex items-center gap-2 mb-3 flex-wrap">
         <h2 className="text-xl font-bold">실시간 회의 녹음</h2>
         <span className="text-sm text-blue-600">
           {status === "rec" ? "녹음 중…" : status === "pause" ? "일시정지" : "처리 중…"}
         </span>
 
-        {/* 일시정지/재개 토글 */}
         <button
           type="button"
           onClick={handlePauseOrResume}
@@ -346,7 +206,6 @@ export default function RecorderPanel({
           />
         </button>
 
-        {/* 정지 */}
         <button
           type="button"
           onClick={handleStop}
@@ -356,7 +215,6 @@ export default function RecorderPanel({
           <img src="/icons/정지.png" alt="정지" className="h-6 w-6" />
         </button>
 
-        {/* 닫기 */}
         <button
           type="button"
           onClick={handleClose}
@@ -367,11 +225,8 @@ export default function RecorderPanel({
         </button>
       </div>
 
-      {/* 본문: 좌(메모/받아쓰기) · 우(RIGHT 탭) */}
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-        {/* 좌측 */}
         <div className="lg:col-span-1 space-y-6">
-          {/* 메모장 */}
           <div className="rounded-2xl bg-white shadow-sm ring-1 ring-black/5">
             <div className="px-5 pt-5 pb-2">
               <div className="flex items-center justify-between">
@@ -386,16 +241,15 @@ export default function RecorderPanel({
             </div>
             <div className="px-5 pb-5">
               <textarea
-                placeholder="회의 중 간단하게 메모 입력할 수 있는 칸…"
+                placeholder="회의 중 간단하게 메모 입력"
                 className="w-full h-60 rounded-xl bg-slate-50 border border-slate-200/70 px-4 py-3
                            text-[14px] text-slate-700 placeholder:text-slate-400
                            outline-none focus:ring-2 focus:ring-sky-200 focus:border-sky-300 transition"
               />
-              <p className="mt-2 text-[12px] text-slate-400">Enter 줄바꿈</p>
+              <p className="mt-2 text-[12px] text-slate-400">Enter 줄바꿈, Ctrl+Enter 문단 구분</p>
             </div>
           </div>
 
-          {/* 실시간 받아쓰기 */}
           <div className="rounded-2xl bg-white shadow-sm ring-1 ring-black/5">
             <div className="px-5 pt-5">
               <div className="flex items-center gap-2">
@@ -428,10 +282,9 @@ export default function RecorderPanel({
           </div>
         </div>
 
-        {/* 우측: RIGHT 탭 */}
         <div className="lg:col-span-2">
           <div className="h-[640px] lg:h-[calc(100vh-180px)] overflow-hidden">
-            {/* @ts-ignore - className만 내려줌 */}
+            {/* @ts-ignore */}
             <RightTabEmbed className="h-full" />
           </div>
         </div>
