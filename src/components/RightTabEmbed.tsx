@@ -111,6 +111,84 @@ export default function RightTabEmbed({ backendGu, className }: Props) {
 
   /* 에디터 RegionMark 클릭 → 패널 selectedGu 반영 */
   useEffect(() => {
+
+    const loadDashboardData = async () => {
+      setIsLoading(true);
+      setError(null);
+
+      try {
+        // 업종 선택값 가져오기 (첫 번째 선택된 업종 사용, 없으면 '음식점업' 기본값)
+        const gu = selectedGu;
+        const mainCategory =
+          Object.values(selections).filter((v) => v)[0] || "음식점업";
+
+        // API URL 동적으로 생성
+        const responses = await Promise.all([
+          fetch(
+            `/api/analytics/store-counts/?gu=${gu}&category=${mainCategory}`
+          ),
+          fetch(
+            `/api/analytics/change-index/?gu=${gu}&category=${mainCategory}`
+          ),
+          fetch(`/api/analytics/closures/?gu=${gu}&category=${mainCategory}`),
+          // fetch(`/api/analytics/industry-metrics/?gu=${gu}&category=${category}`),
+          // fetch(`/api/analytics/sales-estimates/?gu=${gu}&category=${category}`),
+        ]);
+
+        for (const response of responses) {
+          if (!response.ok) {
+            throw new Error(`API 호출 중 에러: ${response.status}`);
+          }
+        }
+
+        //json으로 변환
+        const [storeCountsData, changeIndexData, closuresData] =
+          await Promise.all(responses.map((res) => res.json()));
+
+        // --- 여기서부터는 백엔드 응답 데이터에 맞춰 가공해야 합니다. (아래는 예시) ---
+        // 예시: 백엔드가 준 데이터를 프론트엔드 state 형식으로 변환
+        // setDayData(storeCountsData.dailyData);
+        // setGenderData({
+        //   female: changeIndexData.gender.female_ratio,
+        //   male: changeIndexData.gender.male_ratio
+        // });
+        // setSummary({ day: closuresData.summaryText, ... });
+
+        // --- 임시 목업 데이터 (백엔드 연동 전까지 사용) ---
+        setDayData([
+          { label: "월", value: 10.9 },
+          { label: "금", value: 30.4 },
+        ]);
+        setGenderData({ female: 61.7, male: 38.3 });
+        setTimeData([
+          { time: "00~06시", value: 0 },
+          { time: "14~17시", value: 52 },
+        ]);
+        setAgeData([
+          { label: "10대", value: 1 },
+          { label: "20대", value: 32.6 },
+        ]);
+        setMaxDayItem({ label: "금", value: 30.4 });
+
+        // fetch 함수로 API 호출
+        // const response = await fetch(apiUrl);
+
+        // 응답이 실패한 경우 (예: 404, 500 에러)
+        // if (!storeCountsRes.ok || !changeIndexRes.ok || !closuresRes.ok) {
+        //   throw new Error(`API 호출 중 에러가 발생했습니다.`);
+
+        // 응답 본문을 JSON으로 파싱
+        // const data = await response.json();
+
+        // 받아온 실제 데이터로 모든 state 업데이트
+        // setGenderData(data.charts.genderSales);
+        // setTimeData(data.charts.timeSales);
+        // setAgeData(data.charts.ageSales);
+        // setDayData(data.charts.daySales);
+
+        // setSummary(data.summaries);
+        // setAiGeneratedButton(data.aiRecommendations);
+
     if (!selectedRegion) return;
     if (selectedRegion !== selectedGu) setSelectedGu(selectedRegion);
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -172,6 +250,7 @@ export default function RightTabEmbed({ backendGu, className }: Props) {
       const t: ChartItem[] | null = data?.charts?.timeSales ?? null;
       const a: ChartItem[] | null = data?.charts?.ageSales ?? null;
       const d: ChartItem[] | null = data?.charts?.daySales ?? null;
+
 
       setGenderData(g);
       setTimeData(t);
@@ -261,6 +340,23 @@ export default function RightTabEmbed({ backendGu, className }: Props) {
           }
         }
 
+        if (data.summary) {
+          setSummary(data.summary);
+        }
+
+        // 받아온 데이터로 state 업데이트
+        setGenderData(data.genderData);
+        setTimeData(data.timeData);
+        setAgeData(data.ageData);
+        setDayData(data.dayData);
+      } catch (err: any) {
+        // 에러 발생 시 에러 메시지 저장
+        setError(err.message);
+        console.error("API 호출 중 에러 발생:", err);
+      } finally {
+        setIsLoading(false);
+
+
         // 3) 모두 실패
         setError(
           `선택한 구('${selectedGu}')와 최근 분기들에 해당하는 데이터가 없습니다. 다른 구나 분기를 선택해 보세요.`
@@ -277,8 +373,15 @@ export default function RightTabEmbed({ backendGu, className }: Props) {
         clearCharts();
       } finally {
         if (!disposed) setIsLoading(false);
+
       }
     }
+
+
+    if (selectedGu) {
+      loadDashboardData();
+    } // 함수 실행
+  }, [selectedGu, selections]); // '구' 또는 '업종'이 바뀔 때마다 재실행
 
     load();
     return () => {
@@ -286,6 +389,7 @@ export default function RightTabEmbed({ backendGu, className }: Props) {
       ac.abort();
     };
   }, [selectedGu, mainCategory, yyq, setGlobalRegion]);
+
 
   /* ───────── 로딩/에러/빈 상태 ───────── */
   if (isLoading) return <div className={className}>데이터를 불러오는 중입니다…</div>;
