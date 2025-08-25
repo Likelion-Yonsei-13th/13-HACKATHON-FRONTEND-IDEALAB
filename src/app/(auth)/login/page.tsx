@@ -3,6 +3,7 @@
 
 import { useRouter, useSearchParams } from "next/navigation";
 import { useState, Suspense } from "react";
+import { ENDPOINTS } from "@/lib/endpoints";
 
 function LoginForm() {
   const router = useRouter();
@@ -20,19 +21,25 @@ function LoginForm() {
     setErr("");
 
     try {
-      const r = await fetch("/api/login", {
+      const r = await fetch(ENDPOINTS.auth.login, {
         method: "POST",
         headers: { "content-type": "application/json" },
+        // 쿠키/세션 쓰는 백엔드라면 주석 해제
+        // credentials: "include",
         body: JSON.stringify({ email, password: pw }),
       });
+
       if (!r.ok) {
+        // 백엔드가 에러 메시지를 JSON으로 내려주면 표시
         const j = await r.json().catch(() => ({}));
-        setErr(j?.message || "로그인 실패");
+        setErr(j?.message || `로그인 실패 (HTTP ${r.status})`);
         setLoading(false);
         return;
       }
+
+      // 성공 처리
       router.replace(next);
-    } catch {
+    } catch (e) {
       setErr("네트워크 오류");
       setLoading(false);
     }

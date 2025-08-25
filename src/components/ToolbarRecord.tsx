@@ -1,38 +1,40 @@
-// components/ToolbarRecord.tsx
+// File: src/components/ToolbarRecord.tsx
 "use client";
 
 import { useEffect, useRef, useState } from "react";
 import { PiMicrophoneFill, PiStopFill } from "react-icons/pi";
+import { ENDPOINTS } from "@/lib/endpoints";
 
-// =================== 설정 ===================
-// 예시: 같은 도메인에 프록시해두면 상대경로로도 OK
-const WS_URL = `${location.protocol === "https:" ? "wss" : "ws"}://${location.host}/stt/stream`;
-const HTTP_CHUNK_URL = `/stt/chunk`;
-const HTTP_FINALIZE_URL = `/stt/finalize`;
-// 기본 언어
+/* =================== 설정 =================== */
 const DEFAULT_LANG: "ko" | "en" = "ko";
-// ===========================================
+/* =========================================== */
 
-export default function ToolbarRecord({ editor, lang = DEFAULT_LANG }: { editor: any; lang?: "ko" | "en" }) {
+export default function ToolbarRecord({
+  editor,
+  lang = DEFAULT_LANG,
+}: {
+  editor: any;
+  lang?: "ko" | "en";
+}) {
   const [isRecording, setIsRecording] = useState(false);
   const [loading, setLoading] = useState(false);
 
   // 공통 참조
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
-  const sessionIdRef = useRef<string>("");
   const liveNodeIdRef = useRef<string>("");
+  const meetingIdRef = useRef<string>(""); // ★ 회의 ID
 
-  // WS용
+  // WS/HTTP
   const wsRef = useRef<WebSocket | null>(null);
   const isUsingWSRef = useRef<boolean>(false);
-
-  // HTTP용
   const httpStopRef = useRef<null | (() => Promise<void>)>(null);
 
   const pickMimeType = () => {
-    if (MediaRecorder.isTypeSupported("audio/ogg;codecs=opus")) return "audio/ogg;codecs=opus";
-    if (MediaRecorder.isTypeSupported("audio/webm;codecs=opus")) return "audio/webm;codecs=opus";
-    return ""; // 브라우저 기본값
+    if (typeof MediaRecorder !== "undefined") {
+      if (MediaRecorder.isTypeSupported("audio/ogg;codecs=opus")) return "audio/ogg;codecs=opus";
+      if (MediaRecorder.isTypeSupported("audio/webm;codecs=opus")) return "audio/webm;codecs=opus";
+    }
+    return "";
   };
 
   const insertLiveHolder = () => {
@@ -74,24 +76,36 @@ export default function ToolbarRecord({ editor, lang = DEFAULT_LANG }: { editor:
 
   const start = async () => {
     try {
+      // 0) 회의 생성 → meetingId 확보
+      const cr = await fetch(ENDPOINTS.meetings.create, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ title: `회의 ${new Date().toLocaleString()}` }),
+      });
+      if (!cr.ok) throw new Error("회의 생성 실패");
+      const cj = await cr.json();
+      meetingIdRef.current = (cj.id ?? cj.meeting_id ?? "").toString();
+      if (!meetingIdRef.current) throw new Error("meeting_id 없음");
+
+      // 1) 마이크
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
       const mime = pickMimeType();
 
       insertLiveHolder();
 
-      // 1) 먼저 WebSocket 시도
+      // 2) 먼저 WebSocket 시도
       try {
         await startWS(stream, mime);
         isUsingWSRef.current = true;
-      } catch (e) {
-        // 2) 실패 시 HTTP 폴백
+      } catch {
+        // 3) 실패 시 HTTP 폴백
         await startHTTP(stream, mime);
         isUsingWSRef.current = false;
       }
 
       setIsRecording(true);
     } catch (e) {
-      alert("마이크 권한/연결 오류가 발생했습니다. 브라우저 권한을 확인해주세요");
+      alert("마이크/서버 연결 오류가 발생했습니다. 브라우저 권한과 서버 상태를 확인해주세요.");
       console.error(e);
     }
   };
@@ -99,20 +113,16 @@ export default function ToolbarRecord({ editor, lang = DEFAULT_LANG }: { editor:
   const stop = async () => {
     setLoading(true);
     try {
-      // 녹음/스트림 종료
       mediaRecorderRef.current?.stop();
       mediaRecorderRef.current?.stream.getTracks().forEach((t) => t.stop());
       mediaRecorderRef.current = null;
 
       if (isUsingWSRef.current) {
-        // WS 모드
         if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
-          wsRef.current.send(JSON.stringify({ type: "stop", sessionId: sessionIdRef.current }));
+          wsRef.current.send(JSON.stringify({ type: "stop", meetingId: meetingIdRef.current }));
         }
-        // 서버가 summary를 보내고 close할 때까지 잠시 대기
-        setTimeout(() => wsRef.current?.close(), 4000);
+        setTimeout(() => wsRef.current?.close(), 2000);
       } else {
-        // HTTP 모드
         if (httpStopRef.current) await httpStopRef.current();
       }
     } finally {
@@ -124,49 +134,49 @@ export default function ToolbarRecord({ editor, lang = DEFAULT_LANG }: { editor:
   // ---- WebSocket 모드 ----
   const startWS = async (stream: MediaStream, mime: string) =>
     new Promise<void>((resolve, reject) => {
+      const WS_URL = ENDPOINTS.sttWS?.stream || ""; // 없으면 빈 문자열
+      if (!WS_URL) return reject(new Error("WS 미지원"));
+
       const codec =
         mime.includes("ogg") ? "ogg_opus" : mime.includes("webm") ? "webm_opus" : "unknown";
-      const ws = new WebSocket(`${WS_URL}?lang=${lang}&codec=${codec}`);
+      const qs = `?lang=${lang}&codec=${codec}&meetingId=${encodeURIComponent(
+        meetingIdRef.current
+      )}`;
+      const ws = new WebSocket(`${WS_URL}${qs}`);
       ws.binaryType = "arraybuffer";
       wsRef.current = ws;
-      sessionIdRef.current = crypto.randomUUID();
 
       ws.onopen = () => {
         ws.send(
           JSON.stringify({
             type: "start",
-            sessionId: sessionIdRef.current,
+            meetingId: meetingIdRef.current,
             contentType: mime || "audio/webm;codecs=opus",
           })
         );
-        // onopen 된 시점에 MediaRecorder 시작
         const mr = new MediaRecorder(stream, mime ? { mimeType: mime } : undefined);
         mediaRecorderRef.current = mr;
         mr.ondataavailable = (e) => {
           if (e.data && e.data.size > 0 && ws.readyState === WebSocket.OPEN) ws.send(e.data);
         };
-        mr.start(3000); // 3초 청크
+        mr.start(3000);
         resolve();
       };
 
       ws.onerror = () => reject(new Error("WS 연결 실패"));
 
       ws.onmessage = (evt) => {
-        // 서버 메시지 규약: partial / final / summary
         try {
           const msg = JSON.parse(evt.data);
           if (msg.type === "partial") updatePartial(msg.text);
           else if (msg.type === "final") insertFinalLine(msg.text);
           else if (msg.type === "summary") finishWithSummary(msg);
-        } catch {
-          // 바이너리 pong 등은 무시
-        }
+        } catch { /* ignore */ }
       };
     });
 
   // ---- HTTP 폴백 모드 ----
   const startHTTP = async (stream: MediaStream, mime: string) => {
-    sessionIdRef.current = crypto.randomUUID();
     const mr = new MediaRecorder(stream, mime ? { mimeType: mime } : undefined);
     mediaRecorderRef.current = mr;
 
@@ -174,11 +184,13 @@ export default function ToolbarRecord({ editor, lang = DEFAULT_LANG }: { editor:
       if (!e.data || e.data.size === 0) return;
       const fd = new FormData();
       fd.append("audio", e.data, `chunk.${mime.includes("ogg") ? "ogg" : "webm"}`);
-      fd.append("sessionId", sessionIdRef.current);
       fd.append("lang", lang);
 
       try {
-        const res = await fetch(HTTP_CHUNK_URL, { method: "POST", body: fd });
+        const res = await fetch(ENDPOINTS.meetings.sttChunk(meetingIdRef.current), {
+          method: "POST",
+          body: fd,
+        });
         const data = await res.json(); // { partial?: string, final?: string }
         if (data.partial) updatePartial(data.partial);
         if (data.final) insertFinalLine(data.final);
@@ -189,10 +201,9 @@ export default function ToolbarRecord({ editor, lang = DEFAULT_LANG }: { editor:
 
     mr.start(3000);
 
-    // stop 핸들러 저장
     httpStopRef.current = async () => {
       try {
-        const res = await fetch(`${HTTP_FINALIZE_URL}?sessionId=${sessionIdRef.current}`, {
+        const res = await fetch(ENDPOINTS.meetings.finalize(meetingIdRef.current), {
           method: "POST",
         });
         const fin = await res.json(); // { audioUrl, transcript, summary }
@@ -205,8 +216,12 @@ export default function ToolbarRecord({ editor, lang = DEFAULT_LANG }: { editor:
 
   useEffect(() => {
     return () => {
-      mediaRecorderRef.current?.stream.getTracks().forEach((t) => t.stop());
-      if (wsRef.current && wsRef.current.readyState <= 1) wsRef.current.close();
+      try {
+        mediaRecorderRef.current?.stream.getTracks().forEach((t) => t.stop());
+      } catch {}
+      try {
+        if (wsRef.current && wsRef.current.readyState <= 1) wsRef.current.close();
+      } catch {}
     };
   }, []);
 
@@ -224,9 +239,5 @@ export default function ToolbarRecord({ editor, lang = DEFAULT_LANG }: { editor:
 }
 
 function escapeHtml(s: string) {
-  return s
-    .replaceAll("&", "&amp;")
-    .replaceAll("<", "&lt;")
-    .replaceAll(">", "&gt;")
-    .replaceAll('"', "&quot;");
+  return s.replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;").replaceAll('"', "&quot;");
 }

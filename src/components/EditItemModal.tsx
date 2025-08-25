@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom"; // ✅ 추가
 
 export default function EditItemModal({
   open,
@@ -26,7 +27,15 @@ export default function EditItemModal({
     const onKey = (e: KeyboardEvent) => e.key === "Escape" && onClose();
     window.addEventListener("keydown", onKey);
     inputRef.current?.focus();
-    return () => window.removeEventListener("keydown", onKey);
+
+    // ✅ 열려있는 동안 body 스크롤 잠금 (선택)
+    const prevOverflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+
+    return () => {
+      window.removeEventListener("keydown", onKey);
+      document.body.style.overflow = prevOverflow;
+    };
   }, [open, initialTitle, initialColor, onClose]);
 
   if (!open) return null;
@@ -36,13 +45,22 @@ export default function EditItemModal({
     "#8b5cf6", "#06b6d4", "#f472b6", "#22c55e",
   ];
 
-  return (
+  // ✅ 모달 DOM
+  const modal = (
     <div
-      className="fixed inset-0 z-[110] flex items-center justify-center bg-black/40 p-4"
-      role="dialog" aria-modal="true" onClick={onClose}
+      className="fixed inset-0 z-[200] flex items-center justify-center p-4" // z-index 살짝 키움
+      role="dialog"
+      aria-modal="true"
     >
+      {/* 어두운 배경 */}
+      <button
+        className="absolute inset-0 bg-black/50"
+        aria-label="close"
+        onClick={onClose}
+      />
+      {/* 모달 카드 */}
       <div
-        className="w-full max-w-md rounded-xl bg-white p-6 shadow-2xl"
+        className="relative z-[1] w-full max-w-md rounded-xl bg-white p-6 shadow-2xl"
         onClick={(e) => e.stopPropagation()}
       >
         <h2 className="text-lg font-semibold mb-4">이름/색상 수정</h2>
@@ -81,13 +99,19 @@ export default function EditItemModal({
         </div>
 
         <div className="flex justify-end gap-2">
-          <button type="button" onClick={onClose}
-                  className="rounded-md bg-neutral-100 px-4 py-2 hover:bg-neutral-200">
+          <button
+            type="button"
+            onClick={onClose}
+            className="rounded-md bg-neutral-100 px-4 py-2 hover:bg-neutral-200"
+          >
             취소
           </button>
           <button
             type="button"
-            onClick={() => { onSave({ title: title.trim() || initialTitle, color }); onClose(); }}
+            onClick={() => {
+              onSave({ title: title.trim() || initialTitle, color });
+              onClose();
+            }}
             className="rounded-md bg-blue-600 px-4 py-2 text-white hover:bg-blue-700"
           >
             저장
@@ -96,4 +120,7 @@ export default function EditItemModal({
       </div>
     </div>
   );
+
+  // ✅ body로 포탈 렌더
+  return createPortal(modal, document.body);
 }
