@@ -271,7 +271,7 @@ export default function RightTab({ backendGu }) {
 
   return (
     <main className="flex flex-col h-screen gap-2">
-      {/* 회의록 */}
+      {/* 회의록- 기주님 */}
 
       {/* 상단 버튼 */}
       <div>
