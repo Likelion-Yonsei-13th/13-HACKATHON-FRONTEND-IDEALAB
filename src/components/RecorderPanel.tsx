@@ -1,7 +1,7 @@
 // File: src/components/RecorderPanel.tsx
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import dynamic from "next/dynamic";
 import { ENDPOINTS } from "@/lib/endpoints";
 
@@ -15,7 +15,7 @@ export type RecorderResult = {
 
 type RecStatus = "rec" | "pause" | "processing";
 
-// ✅ 브라우저 전역 선언
+// ✅ 브라우저 전역 선언 (Chrome 계열)
 declare global {
   interface Window {
     webkitSpeechRecognition?: any;
@@ -24,7 +24,7 @@ declare global {
 }
 
 export default function RecorderPanel({
-  meetingId = "1",
+  meetingId, // 숫자 아닌 값이 오더라도 내부에서 가드
   onClose,
   onFinish,
 }: {
@@ -48,10 +48,20 @@ export default function RecorderPanel({
   const startedAtRef = useRef<number>(0);
   const runningRef = useRef<boolean>(false);
 
+  // ✅ meetingId 숫자 변환 (숫자가 아니면 null)
+  const numericMeetingId = useMemo(() => {
+    if (typeof meetingId === "number") return meetingId;
+    if (typeof meetingId === "string" && /^\d+$/.test(meetingId)) return Number(meetingId);
+    return null;
+  }, [meetingId]);
+
+  const canCallApi = numericMeetingId != null;
+
   /* ====================== 서버 전송 ====================== */
   async function postChunk(text: string, start_ms: number, end_ms: number) {
+    if (!canCallApi) return; // 🛑 숫자 meetingId 준비 전이면 API 호출하지 않음
     try {
-      const res = await fetch(ENDPOINTS.meetings.stt.chunk(meetingId), {
+      const res = await fetch(ENDPOINTS.meetings.stt.chunk(numericMeetingId!), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         credentials: "include",
@@ -59,16 +69,26 @@ export default function RecorderPanel({
       });
       if (!res.ok) {
         const t = await res.text().catch(() => "");
-        console.error("stt-chunk error:", res.status, t);
+        console.warn("[stt-chunk] error:", res.status, t);
       }
     } catch (e) {
-      console.error("stt-chunk network error", e);
+      console.warn("[stt-chunk] network error", e);
     }
   }
 
   async function finalizeMeeting() {
+    // meetingId가 없으면 로컬 결과만 반환
+    if (!canCallApi) {
+      onFinish({
+        audioUrl: "",
+        transcript: finals.join("\n"),
+        summary: summary || "",
+      });
+      return;
+    }
+
     try {
-      const res = await fetch(ENDPOINTS.meetings.stt.finalize(meetingId), {
+      const res = await fetch(ENDPOINTS.meetings.stt.finalize(numericMeetingId!), {
         method: "POST",
         credentials: "include",
       });
@@ -80,7 +100,7 @@ export default function RecorderPanel({
       });
       setSummary(data.summary || "");
     } catch (e) {
-      console.error("finalize error", e);
+      console.warn("[finalize] error", e);
       onFinish({
         audioUrl: "",
         transcript: finals.join("\n"),
@@ -133,9 +153,8 @@ export default function RecorderPanel({
 
     rec.onerror = (e: any) => {
       console.warn("SpeechRecognition error", e);
-      // 사용자가 권한 거부 or 사이트에서 차단된 경우
       if (e?.error === "not-allowed") {
-        alert("마이크 권한이 차단되었습니다. 주소창 왼쪽 자물쇠 → 사이트 설정 → 마이크를 '허용'으로 변경하고 새로고침하세요.");
+        alert("마이크 권한이 차단되었습니다. 주소창 왼쪽 자물쇠 → 사이트 설정 → 마이크 '허용'으로 변경 후 새로고침하세요.");
         runningRef.current = false;
         try { rec.stop(); } catch {}
         setStatus("pause");
@@ -168,9 +187,10 @@ export default function RecorderPanel({
 
   /* ====================== 3분 라이브 요약 ====================== */
   const fetchLiveMinutes = async () => {
+    if (!canCallApi) return; // meetingId 없을 때는 폴링 자체를 하지 않음
     setLiveLoading(true);
     try {
-      const r = await fetch(ENDPOINTS.meetings.minutes.live(meetingId), {
+      const r = await fetch(ENDPOINTS.meetings.minutes.live(numericMeetingId!), {
         method: "GET",
         credentials: "include",
       });
@@ -201,6 +221,7 @@ export default function RecorderPanel({
 
   const startLivePolling = () => {
     stopLivePolling();
+    if (!canCallApi) return; // 숫자 ID 없으면 시작하지 않음
     fetchLiveMinutes(); // 즉시 1회
     livePollRef.current = setInterval(fetchLiveMinutes, 3 * 60 * 1000);
   };
@@ -216,17 +237,22 @@ export default function RecorderPanel({
     let cancelled = false;
 
     (async () => {
+      // meetingId가 아직 숫자가 아니면 안내하고 아무 것도 시작하지 않음
+      if (!canCallApi) {
+        setStatus("pause");
+        return;
+      }
+
       try {
-        // 창이 버튼으로 열린 직후: 권한 프롬프트를 바로 띄워 승인 받기
+        // 버튼으로 열렸을 때: 권한 프롬프트 먼저
         const tmp = await navigator.mediaDevices.getUserMedia({ audio: true });
         tmp.getTracks().forEach((t) => t.stop());
         if (cancelled) return;
 
-        // 권한 OK → 인식 시작 + 라이브 요약 폴링 시작
+        // 권한 OK → 인식 + 라이브 요약 폴링
         startRecognition();
         startLivePolling();
       } catch {
-        // 권한 거부 시 상태만 표시
         setStatus("pause");
         alert("마이크 권한을 허용해 주세요 (주소창 왼쪽 자물쇠 → 마이크 허용).");
       }
@@ -240,7 +266,7 @@ export default function RecorderPanel({
       stopLivePolling();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [canCallApi]);
 
   /* ====================== 컨트롤 ====================== */
   const handlePauseOrResume = () => {
@@ -281,6 +307,13 @@ export default function RecorderPanel({
 
   return (
     <div className="px-6 pt-3">
+      {/* meetingId 준비 안 됐을 때 경고 리본 */}
+      {!canCallApi && (
+        <div className="mb-3 rounded-lg border border-amber-200 bg-amber-50 text-amber-800 px-3 py-2 text-sm">
+          회의 ID가 아직 준비되지 않아 녹음/요약 기능이 비활성화되어 있습니다. 잠시 후 다시 시도해 주세요.
+        </div>
+      )}
+
       <div className="flex items-center gap-2 mb-3 flex-wrap">
         <h2 className="text-xl font-bold">실시간 회의 녹음</h2>
         <span className="text-sm text-blue-600">
@@ -291,7 +324,8 @@ export default function RecorderPanel({
           type="button"
           onClick={handlePauseOrResume}
           title={status === "pause" ? "재개" : "일시정지"}
-          className="rounded-md p-1 hover:bg-neutral-100"
+          className="rounded-md p-1 hover:bg-neutral-100 disabled:opacity-50"
+          disabled={!canCallApi}
         >
           <img
             src={status === "pause" ? "/icons/재개.png" : "/icons/일시정지.png"}
@@ -304,7 +338,8 @@ export default function RecorderPanel({
           type="button"
           onClick={handleStop}
           title="정지"
-          className="rounded-md p-1 hover:bg-neutral-100"
+          className="rounded-md p-1 hover:bg-neutral-100 disabled:opacity-50"
+          disabled={!canCallApi}
         >
           <img src="/icons/정지.png" alt="정지" className="h-6 w-6" />
         </button>

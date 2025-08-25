@@ -1,4 +1,4 @@
-// File: src/components/Editor.tsx
+// src/components/Editor.tsx
 "use client";
 
 import React, { useEffect, useMemo, useRef, useState } from "react";
@@ -120,7 +120,6 @@ async function apiCreateBlock(params: {
     throw err;
   }
 
-  /** 응답 예시: { id, meeting, ..., version } */
   return {
     id: String(data.id ?? data.pk ?? data.block_id),
     version: Number(data.version ?? 1),
@@ -320,53 +319,52 @@ export default function Editor({
   /* ---------- 자동 저장 ---------- */
   const saveCtrlRef = useRef<AbortController | null>(null);
 
-const saveToServer = useMemo(
-  () =>
-    debounce(async (html: string) => {
-      try {
-        const info = await ensureBlockId(() => html);
-        if (!info.id || info.ver == null) {
-          console.warn("[autosave] block id / version 확보 실패 → 스킵");
-          return;
-        }
-
-        if (saveCtrlRef.current) saveCtrlRef.current.abort();
-        const ctrl = new AbortController();
-        saveCtrlRef.current = ctrl;
-
-        // 1차 시도
+  const saveToServer = useMemo(
+    () =>
+      debounce(async (html: string) => {
         try {
-          const r1 = await apiPatchBlock(info.id, html, info.ver);
-          setVersion(r1.version);
-          return;
-        } catch (e: any) {
-          if (e?.status === 409) {
-            // ✅ 응답 본문에 currentVersion이 없더라도, 무조건 GET으로 최신 버전 가져와서 재시도
-            try {
-              const latest = await apiGetBlock(info.id);
-              const r2 = await apiPatchBlock(info.id, html, latest.version);
-              setVersion(r2.version);
-              return;
-            } catch (e2) {
-              console.warn("자동저장 재시도 실패:", e2);
+          const info = await ensureBlockId(() => html);
+          if (!info.id || info.ver == null) {
+            console.warn("[autosave] block id / version 확보 실패 → 스킵");
+            return;
+          }
+
+          if (saveCtrlRef.current) saveCtrlRef.current.abort();
+          const ctrl = new AbortController();
+          saveCtrlRef.current = ctrl;
+
+          // 1차 시도
+          try {
+            const r1 = await apiPatchBlock(info.id, html, info.ver);
+            setVersion(r1.version);
+            return;
+          } catch (e: any) {
+            if (e?.status === 409) {
+              // 응답에 currentVersion이 없더라도 GET으로 최신 버전 받아 재시도
+              try {
+                const latest = await apiGetBlock(info.id);
+                const r2 = await apiPatchBlock(info.id, html, latest.version);
+                setVersion(r2.version);
+                return;
+              } catch (e2) {
+                console.warn("자동저장 재시도 실패:", e2);
+              }
             }
+            throw e;
           }
-          throw e;
+        } catch (e: any) {
+          // 마지막으로 서버 버전 동기화만 시도
+          try {
+            if (blockId) {
+              const fresh = await apiGetBlock(blockId);
+              setVersion(fresh.version);
+            }
+          } catch {}
+          console.warn("자동 저장 실패:", e);
         }
-      } catch (e: any) {
-        // 마지막으로 서버 버전 동기화만 시도
-        try {
-          if (blockId) {
-            const fresh = await apiGetBlock(blockId);
-            setVersion(fresh.version);
-          }
-        } catch {}
-        console.warn("자동 저장 실패:", e);
-      }
-    }, 800),
-  [blockId, version, numericMeeting]
-);
-
+      }, 800),
+    [blockId, version, numericMeeting]
+  );
 
   useEffect(() => {
     if (!editor) return;
@@ -391,6 +389,12 @@ const saveToServer = useMemo(
   );
 
   const handleOpenRecorder = async () => {
+    // ✅ meetingId가 숫자로 준비 안 됐으면 녹음 열지 않기 (ws1 → 404 방지)
+    if (numericMeeting == null) {
+      alert("회의 ID가 아직 준비되지 않았어요. 잠시 후 다시 시도해 주세요.");
+      return;
+    }
+
     try {
       const tmp = await navigator.mediaDevices.getUserMedia({ audio: true });
       tmp.getTracks().forEach((t) => t.stop());
@@ -398,16 +402,12 @@ const saveToServer = useMemo(
       alert("마이크 권한을 허용해 주세요 (주소창 왼쪽 자물쇠 아이콘 → 마이크: 허용).");
       return;
     }
-    try {
-      setCollapsed(true as any);
-    } catch {}
+    try { setCollapsed(true as any); } catch {}
     setRecOpen(true);
   };
 
   const handleCloseRecorder = () => {
-    try {
-      setCollapsed(false as any);
-    } catch {}
+    try { setCollapsed(false as any); } catch {}
     setRecOpen(false);
   };
 
@@ -419,8 +419,8 @@ const saveToServer = useMemo(
     );
   }
 
-  /* 녹음 패널에서 사용할 meeting id — 숫자면 그걸, 아니면 블록 id */
-  const effectiveMeetingId = numericMeeting ?? (blockId ?? String(docId));
+  /* 녹음 패널에서 사용할 meeting id — 숫자만 허용 */
+  const effectiveMeetingId = numericMeeting ?? undefined;
 
   return (
     <div className="w-full">
@@ -440,7 +440,7 @@ const saveToServer = useMemo(
             meetingId={effectiveMeetingId}
             onClose={handleCloseRecorder}
             onFinish={(p) => {
-              // ✅ 녹음 끝나면 "요약만" 문서에 남기기 (오디오/전체 스크립트 삭감)
+              // ✅ 녹음 끝나면 "요약만" 문서에 남기기
               const html = `
                 <div class="ai-summary">
                   <p><strong>요약</strong></p>
@@ -457,7 +457,6 @@ const saveToServer = useMemo(
           />
         ) : (
           <>
-            {/* 지역 마크 전역 스타일 */}
             <style jsx global>{`
               .tiptap span[data-region] {
                 font-weight: 700;
@@ -503,7 +502,8 @@ function Toolbar({
       : "bg-white text-neutral-900 border-neutral-200 shadow";
   const btnBase =
     "h-9 rounded-md px-2 text-sm inline-flex items-center justify-center gap-1 border transition active:scale-[.98]";
-  const btnTone = theme === "dark" ? "border-neutral-800 hover:bg-neutral-800/70" : "border-neutral-200 hover:bg-neutral-50";
+  const btnTone =
+    theme === "dark" ? "border-neutral-800 hover:bg-neutral-800/70" : "border-neutral-200 hover:bg-neutral-50";
   const activeTone = theme === "dark" ? "bg-neutral-800" : "bg-neutral-100";
   const iconBtnBase =
     "h-9 w-9 rounded-md inline-flex items-center justify-center border transition active:scale-[.98] " +
