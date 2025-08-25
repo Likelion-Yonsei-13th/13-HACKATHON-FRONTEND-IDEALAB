@@ -28,7 +28,39 @@ type Props = {
   className?: string;
 };
 
-/* ───────── 헬퍼 함수 ───────── */
+// 헬퍼함수
+/** 한글 '구' 이름을 자치구 코드로 변환 */
+function guNameToCode(guName: string): string {
+  const guCodeMap: Record<string, string> = {
+    종로구: "11110",
+    중구: "11140",
+    용산구: "11170",
+    성동구: "11200",
+    광진구: "11215",
+    동대문구: "11230",
+    중랑구: "11260",
+    성북구: "11290",
+    강북구: "11305",
+    도봉구: "11320",
+    노원구: "11350",
+    은평구: "11380",
+    서대문구: "11410",
+    마포구: "11440",
+    양천구: "11470",
+    강서구: "11500",
+    구로구: "11530",
+    금천구: "11545",
+    영등포구: "11560",
+    동작구: "11590",
+    관악구: "11620",
+    서초구: "11650",
+    강남구: "11680",
+    송파구: "11710",
+    강동구: "11740",
+  };
+  // 맵에 코드가 있으면 해당 코드를, 없으면 원래 이름을 반환 (안전장치)
+  return guCodeMap[guName] || guName;
+}
 
 /** base(url) + query를 안전하게 합치기 (절대/상대 모두 대응) */
 function withQuery(base: string, params: Record<string, string | undefined>) {
@@ -39,34 +71,6 @@ function withQuery(base: string, params: Record<string, string | undefined>) {
     if (v != null && v !== "") u.searchParams.set(k, v);
   });
   return u.toString();
-}
-
-/** 한글 카테고리를 서버 토큰으로 변환(없으면 원문 그대로) */
-function toServerCategory(kor: string): string {
-  const map: Record<string, string> = {
-    음식점업: "restaurant",
-    카페: "cafe",
-    편의점: "convenience_store",
-    병원: "hospital",
-    학원: "academy",
-    미용실: "beauty",
-  };
-  return map[kor] ?? kor;
-}
-
-/** 분기를 하나 이전으로 */
-function prevYyq(cur: string): string {
-  const m = cur.match(/^(\d{4})Q([1-4])$/);
-  if (!m) return cur;
-  let y = Number(m[1]);
-  let q = Number(m[2]);
-  if (q === 1) {
-    y -= 1;
-    q = 4;
-  } else {
-    q -= 1;
-  }
-  return `${y}Q${q}`;
 }
 
 export default function RightTabEmbed({ backendGu, className }: Props) {
@@ -94,11 +98,10 @@ export default function RightTabEmbed({ backendGu, className }: Props) {
 
   const [year] = useState<string>(String(new Date().getFullYear()));
   const yyq = useMemo(() => {
-    const m = new Date().getMonth() + 1;
+    const m = new Date().getMonth() + 1; // 1~12
     const q = m <= 3 ? 1 : m <= 6 ? 2 : m <= 9 ? 3 : 4;
-    return `${year}Q${q}`;
+    return `${year}${q}`;
   }, [year]);
-
   useEffect(() => {
     if (selectedRegion && selectedRegion !== selectedGu) {
       setSelectedGu(selectedRegion);
@@ -123,8 +126,7 @@ export default function RightTabEmbed({ backendGu, className }: Props) {
           ENDPOINTS?.analytics?.industryMetrics ??
           "/api/analytics/industry-metrics";
         const url = withQuery(base, {
-          gu: selectedGu,
-          category: toServerCategory(mainCategory),
+          signgu_cd: guNameToCode(selectedGu),
           yyq: yyq,
         });
 
