@@ -1,7 +1,7 @@
-// File: src/components/MapsGraphs.tsx
+// src/components/MapsGraphs.tsx
 "use client";
 
-import { useEffect, useState, useMemo, JSX } from "react";
+import { useEffect, useMemo, useRef, useState, JSX } from "react";
 import { Map, Polygon } from "react-kakao-maps-sdk";
 import { ENDPOINTS } from "@/lib/endpoints";
 
@@ -10,197 +10,162 @@ type GuArg = string | { name?: string; sig?: string; sigungu_cd?: string };
 interface MapData {
   center: { lat: number; lng: number };
   bounds: any;
-  polygons: JSX.Element[];
+  polygons: JSX.Element[]; // 외곽들
 }
 
-/* ───────── 유틸: 구 이름→코드, selectedGu 정규화 ───────── */
-function guNameToCode(guName: string): string {
-  const guCodeMap: Record<string, string> = {
-    종로구: "11110",
-    중구: "11140", // 서울 '중구'
-    용산구: "11170",
-    성동구: "11200",
-    광진구: "11215",
-    동대문구: "11230",
-    중랑구: "11260",
-    성북구: "11290",
-    강북구: "11305",
-    도봉구: "11320",
-    노원구: "11350",
-    은평구: "11380",
-    서대문구: "11410",
-    마포구: "11440",
-    양천구: "11470",
-    강서구: "11500",
-    구로구: "11530",
-    금천구: "11545",
-    영등포구: "11560",
-    동작구: "11590",
-    관악구: "11620",
-    서초구: "11650",
-    강남구: "11680",
-    송파구: "11710",
-    강동구: "11740",
+const DEFAULT_CENTER = { lat: 37.5665, lng: 126.9780 }; // 서울 시청 근처
+
+/* ─ util: 구 이름→코드, 인자 정규화 ─ */
+function guNameToCode(gu: string) {
+  const m: Record<string, string> = {
+    종로구:"11110", 중구:"11140", 용산구:"11170", 성동구:"11200", 광진구:"11215",
+    동대문구:"11230", 중랑구:"11260", 성북구:"11290", 강북구:"11305", 도봉구:"11320",
+    노원구:"11350", 은평구:"11380", 서대문구:"11410", 마포구:"11440", 양천구:"11470",
+    강서구:"11500", 구로구:"11530", 금천구:"11545", 영등포구:"11560", 동작구:"11590",
+    관악구:"11620", 서초구:"11650", 강남구:"11680", 송파구:"11710", 강동구:"11740",
   };
-  return guCodeMap[guName] || guName || "";
+  return m[gu] || gu || "";
 }
-
-/** 문자열/객체 어떤 형태로 와도 {name, code}로 통일 */
-function normalizeSelectedGu(arg: GuArg): { name: string; code: string } {
-  if (typeof arg === "string") {
-    const name = arg;
-    const code = guNameToCode(name); // '중구'도 11140(서울)로 매핑
-    return { name, code };
-  }
+function normalizeGu(arg: GuArg) {
+  if (typeof arg === "string") return { name: arg, code: guNameToCode(arg) };
   const name = arg?.name || "";
   const code = arg?.sig || arg?.sigungu_cd || (name ? guNameToCode(name) : "");
   return { name: name || code, code: code || "" };
 }
-
-/** GeoJSON geometry에서 외곽 링들만 추출 (Polygon/MultiPolygon 모두) */
 function extractRings(geometry: any): number[][][] {
   if (!geometry) return [];
   const { type, coordinates } = geometry;
-  if (!coordinates) return [];
-
-  // Polygon: [ [ [lng,lat] ... ] , [hole...] ... ]
-  if (type === "Polygon") {
-    // 외곽 링(0번째)만
-    return coordinates[0] ? [coordinates[0]] : [];
-  }
-  // MultiPolygon: [ [ [ [lng,lat] ... ] , [hole...] ... ], [ ... ] ... ]
-  if (type === "MultiPolygon") {
+  if (type === "Polygon") return coordinates?.[0] ? [coordinates[0]] : [];
+  if (type === "MultiPolygon")
     return (coordinates as any[])
-      .map((poly) => (Array.isArray(poly) && poly[0] ? poly[0] : null))
+      ?.map(poly => (Array.isArray(poly) && poly[0] ? poly[0] : null))
       .filter(Boolean) as number[][][];
-  }
   return [];
 }
+const isAbort = (e: any) =>
+  e?.name === "AbortError" || String(e?.message||"").toLowerCase().includes("abort");
 
-/* ───────── 컴포넌트 ───────── */
-export default function MapsGraphs({ selectedGu }: { selectedGu: GuArg }) {
-  const [sigData, setSigData] = useState<any>(null); // 행정구 경계 GeoJSON
-  const [isLoaded, setIsLoaded] = useState(false);
-  const [mapData, setMapData] = useState<MapData | null>(null);
+export default function MapsGraphs({
+  selectedGu,
+  height = 380,            // ← 기본 높이(숫자(px)나 '40vh' 등 문자열도 가능)
+  className = "",
+}: {
+  selectedGu: GuArg;
+  height?: number | string;
+  className?: string;
+}) {
+  const { name: guName, code: guCode } = useMemo(() => normalizeGu(selectedGu), [selectedGu]);
 
-  const { name: guName, code: guCode } = useMemo(
-    () => normalizeSelectedGu(selectedGu),
-    [selectedGu]
-  );
+  const [sigData, setSigData] = useState<any>(null);
+  const [polys, setPolys] = useState<JSX.Element[] | null>(null);
+  const [center, setCenter] = useState(DEFAULT_CENTER);
 
-  // 1) GeoJSON 불러오기 (백엔드 우선, 실패하면 public/SIG.json fallback)
+  const kakaoReadyRef = useRef(false);
+
+  /* 1) SIG.json 로드(있으면 원격, 없으면 /SIG.json) */
   useEffect(() => {
     const ac = new AbortController();
     (async () => {
       try {
-        let url =
-          (ENDPOINTS as any)?.regions?.sig ||
-          (typeof ENDPOINTS === "object" ? (ENDPOINTS as any).regions?.sig : "");
+        let data: any | null = null;
 
-        let res: Response | null = null;
-        if (url) {
+        const remoteSig = (ENDPOINTS as any)?.regions?.sig;
+        if (remoteSig) {
           try {
-            res = await fetch(url, { signal: ac.signal, mode: "cors", cache: "no-store" });
-          } catch {
-            // ignore → fallback
+            const r = await fetch(remoteSig, { signal: ac.signal, cache: "no-store" });
+            if (r.ok) data = await r.json();
+          } catch (e) {
+            if (!isAbort(e)) console.warn("[MapsGraphs] backend SIG fetch failed; fallback /SIG.json");
           }
         }
-        if (!res || !res.ok) {
-          res = await fetch("/SIG.json", { signal: ac.signal, cache: "no-store" });
+        if (!data) {
+          const r2 = await fetch("/SIG.json", { signal: ac.signal, cache: "no-store" });
+          if (r2.ok) data = await r2.json();
         }
-        const data = await res.json();
-        setSigData(data);
+        if (!ac.signal.aborted && data) setSigData(data);
       } catch (e) {
-        console.error("Failed to fetch region data", e);
+        if (!isAbort(e)) console.warn("[MapsGraphs] SIG.json load failed");
       }
     })();
     return () => ac.abort();
   }, []);
 
-  // 2) 카카오맵 로드 체크
+  /* 2) 카카오 SDK 준비 */
   useEffect(() => {
+    if (kakaoReadyRef.current) return;
     const id = setInterval(() => {
-      if (typeof window !== "undefined" && (window as any).kakao?.maps) {
-        (window as any).kakao.maps.load(() => setIsLoaded(true));
+      const kakao = (window as any)?.kakao;
+      if (kakao?.maps) {
+        kakao.maps.load(() => {
+          kakaoReadyRef.current = true;
+          // SDK 준비 완료 — center 는 기본값 유지
+        });
         clearInterval(id);
       }
     }, 100);
     return () => clearInterval(id);
   }, []);
 
-  // 3) 선택된 구에 맞춰 폴리곤 구성
+  /* 3) 시군구 폴리곤 만들기 — 실패해도 지도 자체는 항상 보이도록 */
   useEffect(() => {
-    if (!isLoaded || !sigData || (!guName && !guCode)) return;
+    if (!sigData || (!guName && !guCode)) {
+      setPolys(null);
+      setCenter(DEFAULT_CENTER);
+      return;
+    }
 
-    const features: any[] = sigData?.features || [];
-    const feature = features.find((f) => {
+    const feature = (sigData.features || []).find((f: any) => {
       const cd = f?.properties?.SIG_CD;
       const nm = f?.properties?.SIG_KOR_NM;
-      // 코드가 있으면 코드 우선, 없으면 이름으로 매칭
       return (guCode && cd === guCode) || (!!guName && nm === guName);
     });
 
     if (!feature) {
-      console.error(`${guName || guCode} 에 해당하는 지역 데이터를 찾을 수 없습니다.`);
+      console.warn(`[MapsGraphs] "${guName || guCode}" 매칭 실패 → 기본 지도만 표시`);
+      setPolys(null);
+      setCenter(DEFAULT_CENTER);
       return;
     }
 
     const rings = extractRings(feature.geometry);
-    if (!rings.length) return;
+    if (!rings.length) {
+      setPolys(null);
+      setCenter(DEFAULT_CENTER);
+      return;
+    }
 
-    // 모든 포인트를 LatLng로 변환
-    const paths = rings.map((ring) => ring.map(([lng, lat]) => ({ lat, lng })));
+    // path들 생성
+    const paths = rings.map(ring => ring.map(([lng, lat]) => ({ lat, lng })));
 
-    // 중심/범위 계산
-    let sumLat = 0,
-      sumLng = 0,
-      cnt = 0;
-    paths.forEach((ring) =>
-      ring.forEach((p) => {
-        sumLat += p.lat;
-        sumLng += p.lng;
-        cnt++;
-      })
-    );
-    const center = { lat: sumLat / cnt, lng: sumLng / cnt };
+    // 중심 계산
+    let sLat = 0, sLng = 0, c = 0;
+    paths.forEach(r => r.forEach(p => { sLat += p.lat; sLng += p.lng; c++; }));
+    setCenter({ lat: sLat / c, lng: sLng / c });
 
-    const bounds = new (window as any).kakao.maps.LatLngBounds();
-    paths.forEach((ring) =>
-      ring.forEach((p) => bounds.extend(new (window as any).kakao.maps.LatLng(p.lat, p.lng)))
-    );
-
-    const polygons = paths.map((path, idx) => (
+    // 폴리곤 JSX
+    setPolys(paths.map((path, i) => (
       <Polygon
-        key={`${guCode || guName}-${idx}`}
+        key={`${guCode || guName}-${i}`}
         path={path}
         strokeWeight={3}
-        strokeColor="#ff0000"
+        strokeColor="#0472DE"
         strokeOpacity={1}
-        fillColor="#ff0000"
+        fillColor="#0472DE"
         fillOpacity={0.2}
       />
-    ));
+    )));
+  }, [sigData, guName, guCode]);
 
-    setMapData({ center, bounds, polygons });
-  }, [isLoaded, sigData, guName, guCode]);
-
-  if (!mapData) {
-    return (
-      <div className="flex justify-center items-center h-full">
-        <p>지도를 불러오는 중...</p>
-      </div>
-    );
-  }
+  const hStyle = typeof height === "number" ? { height: `${height}px` } : { height };
 
   return (
-    <div className="w-full h-screen">
+    <div className={`w-full ${className}`} style={hStyle}>
       <Map
-        center={mapData.center}
-        // bounds={mapData.bounds} // 필요 시 주석 해제하면 영역에 맞춰 자동 줌/센터
-        style={{ width: "100%", height: "100%" }}
+        center={center}
         level={7}
+        style={{ width: "100%", height: "100%" }} // ← 부모 높이를 그대로 사용
       >
-        {mapData.polygons}
+        {polys /* 폴리곤이 있으면 얹고, 없어도 기본 지도는 항상 보임 */}
       </Map>
     </div>
   );

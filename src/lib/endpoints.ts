@@ -1,41 +1,39 @@
 // src/lib/endpoints.ts
-
-/** 1) ENV 값 정리: "undefined"/"null" 같은 문자열도 무시 */
+/** 1) ENV 값 정리 */
 const raw = (process.env.NEXT_PUBLIC_API_URL ?? "").trim();
 const envBase =
   raw && raw !== "undefined" && raw !== "null" ? raw.replace(/\/+$/, "") : "";
 
-/** 2) 브라우저에서 추측용 fallback
- * - origin 기반으로 만들고
- * - 포트가 없고 host가 localhost일 때만 :8000 붙여줌(로컬 백엔드가 8000일 때)
- * - 다른 호스트(예: 65.0.101.130)면 포트 안 붙임
- */
+/** 2) 브라우저 fallback (없으면 localhost:8000 으로 추정) */
 const fallbackBase =
   typeof window !== "undefined"
     ? (() => {
         const { protocol, hostname, port } = window.location;
         const base = `${protocol}//${hostname}`;
-        if (port) return `${base}:${port}`;
-        if (hostname === "localhost") return `${base}:8000`; // 필요 시 8000 변경
-        return base; // 외부 IP/도메인은 포트 생략
+        if (port) return `${base}:${port}`;               // ex) http://localhost:3000
+        if (hostname === "localhost") return `${base}:8000`; // ex) http://localhost:8000
+        return base; // 외부 IP/도메인
       })()
     : "";
 
-/** 3) 최종 API/WS BASE */
 export const API_URL = envBase || fallbackBase;
-export const WS_BASE = API_URL
-  ? API_URL.replace(/^http(s?):\/\//, "ws$1://")
-  : "";
+export const WS_BASE = API_URL ? API_URL.replace(/^http(s?):\/\//, "ws$1://") : "";
 
-/** 4) 경고 로그(눈에 띄게) */
 if (!API_URL) {
-  // 여기서 throw 하면 빌드 타이밍에 죽을 수 있으니 에러 로그만
   console.error(
     "[ENDPOINTS] API_URL 이 비어있습니다. .env.local 에 NEXT_PUBLIC_API_URL=http://HOST[:PORT] 를 설정하세요."
   );
 }
 
-/** 5) 엔드포인트 */
+/** 공통: 쿼리 붙이기(항상 마지막에 / 유지) */
+const withQuery = (base: string, params: Record<string, string | number | undefined>) => {
+  const u = new URL(base.endsWith("/") ? base : base + "/");
+  Object.entries(params).forEach(([k, v]) => {
+    if (v !== undefined && v !== null && v !== "") u.searchParams.set(k, String(v));
+  });
+  return u.toString();
+};
+
 export const ENDPOINTS = {
   login: `${API_URL}/api/user/login/`,
   signup: `${API_URL}/api/user/signup/`,
@@ -61,6 +59,7 @@ export const ENDPOINTS = {
       list: (id: string | number) => `${API_URL}/api/meetings/${id}/keywords/`,
     },
   },
+
   blocks: {
     list: `${API_URL}/api/blocks/`,
     create: `${API_URL}/api/blocks/`,
@@ -77,19 +76,26 @@ export const ENDPOINTS = {
     renameCol: (id: string | number) => `${API_URL}/api/blocks/${id}/rename_col/`,
     setColWidth: (id: string | number) => `${API_URL}/api/blocks/${id}/set_col_width/`,
   },
+
   docs: {
-    update: (docId: string | number) =>
-      `${API_URL}/api/docs/${encodeURIComponent(docId)}/`,
+    update: (docId: string | number) => `${API_URL}/api/docs/${encodeURIComponent(docId)}/`,
   },
+
   analytics: {
     storeCounts: `${API_URL}/api/analytics/store-counts/`,
     changeIndex: `${API_URL}/api/analytics/change-index/`,
     closures: `${API_URL}/api/analytics/closures/`,
     industryMetrics: `${API_URL}/api/analytics/industry-metrics/`,
     salesEstimates: `${API_URL}/api/analytics/sales-estimates/`,
+
+    // ✅ 쿼리 붙이는 편의 함수 (항상 슬래시 유지)
+    industryMetricsQ: (q: { sigungu_cd: string; yyq?: string }) =>
+      withQuery(`${API_URL}/api/analytics/industry-metrics/`, q),
   },
-  attachments: {
-    list: `${API_URL}/api/attachments/`,
-    create: `${API_URL}/api/attachments/`,
+
+  // (선택) 지도용 – 없으면 컴포넌트가 public/SIG.json 으로 자동 폴백
+  regions: {
+    sig: `${API_URL}/api/regions/sig/`,                       // 없으면 무시됨
+    info: (gu: string) => withQuery(`${API_URL}/api/regions/info/`, { gu }),
   },
 };
